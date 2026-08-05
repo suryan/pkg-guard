@@ -1,0 +1,79 @@
+[package]
+name = "pkg-guard"
+version = "0.1.0"
+edition = "2021"
+description = "A package security guardian MCP server — audits software packages for typosquatting, malware, and supply chain attacks"
+license = "MIT"
+repository = "https://github.com/surya/pkg-guard"
+keywords = ["security", "supply-chain", "mcp", "audit", "packages"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "pkg-guard"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# HTTP client for registry APIs
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Docker API (container auditing)
+bollard = "0.18"
+
+# String similarity (typosquat detection)
+strsim = "0.11"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Async stream utilities
+futures-util = "0.3"
+tokio-stream = "0.1"
+
+# For reading lines from stdin asynchronously
+tokio-util = { version = "0.7", features = ["codec"] }
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+# Correctness & safety
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+
+# Style & readability
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+# Performance
+needless_collect = "warn"
+inefficient_to_string = "warn"
+
+# Nursery (useful but may have false positives)
+redundant_clone = "warn"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1

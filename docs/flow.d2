@@ -1,0 +1,201 @@
+# pkg-guard — Audit Flow Diagram
+
+direction: down
+
+title: {
+  label: Package Audit Flow
+  near: top-center
+  shape: text
+  style.font-size: 24
+  style.bold: true
+}
+
+# Start
+start: "Package Audit Request" {
+  shape: oval
+  style.fill: "#C8E6C9"
+}
+
+# Step 1: Typosquat
+step1: "1. Typosquat Check" {
+  shape: diamond
+  style.fill: "#FFF9C4"
+}
+
+blocklist_check: "On Blocklist?" {
+  shape: diamond
+  style.fill: "#FFCDD2"
+}
+
+similar_check: "Similar to\nPopular Package?" {
+  shape: diamond
+  style.fill: "#FFE0B2"
+}
+
+blocked: "BLOCKED\nKnown Malicious" {
+  shape: rectangle
+  style.fill: "#F44336"
+  style.font-color: white
+  style.bold: true
+}
+
+warning_typo: "Add Warning:\nTyposquat Suspected" {
+  shape: rectangle
+  style.fill: "#FFA726"
+}
+
+# Step 2: Registry
+step2: "2. Registry Metadata" {
+  shape: rectangle
+  style.fill: "#BBDEFB"
+}
+
+exists_check: "Package Exists?" {
+  shape: diamond
+  style.fill: "#FFCDD2"
+}
+
+failed: "FAILED\nNot on Registry" {
+  shape: rectangle
+  style.fill: "#9E9E9E"
+  style.font-color: white
+}
+
+scripts_check: "Has Install Scripts?\n(npm only)" {
+  shape: diamond
+  style.fill: "#FFE0B2"
+}
+
+warning_scripts: "Add Warning:\nInstall Scripts Detected" {
+  shape: rectangle
+  style.fill: "#FFA726"
+}
+
+# Step 3: Container
+step3: "3. Container Audit" {
+  shape: rectangle
+  style.fill: "#E1BEE7"
+}
+
+docker_check: "Docker Available?" {
+  shape: diamond
+  style.fill: "#E0E0E0"
+}
+
+skip_container: "Skip Container Audit\n(degraded mode)" {
+  shape: rectangle
+  style.fill: "#E0E0E0"
+}
+
+container_steps: {
+  label: Container Audit Steps
+  style.fill: "#F3E5F5"
+
+  pull: "Pull Base Image"
+  create: "Create Container\n(hardened)"
+  install: "Install Package"
+  monitor: "Monitor Behavior"
+  collect: "Collect Results"
+  cleanup: "Cleanup Container"
+
+  pull -> create -> install -> monitor -> collect -> cleanup
+}
+
+suspicious_check: "Suspicious\nBehavior?" {
+  shape: diamond
+  style.fill: "#FFCDD2"
+}
+
+blocked_container: "BLOCKED\nSecurity Risk" {
+  shape: rectangle
+  style.fill: "#F44336"
+  style.font-color: white
+  style.bold: true
+}
+
+# Final result
+result: "Aggregate Results" {
+  shape: rectangle
+  style.fill: "#E8EAF6"
+}
+
+pass: "PASS\nSafe to Install" {
+  shape: rectangle
+  style.fill: "#4CAF50"
+  style.font-color: white
+  style.bold: true
+}
+
+warning_final: "WARNING\nReview Required" {
+  shape: rectangle
+  style.fill: "#FF9800"
+  style.font-color: white
+  style.bold: true
+}
+
+# Flow connections
+start -> step1
+
+step1 -> blocklist_check
+blocklist_check -> blocked: "Yes"
+blocklist_check -> similar_check: "No"
+similar_check -> warning_typo: "Yes"
+similar_check -> step2: "No"
+warning_typo -> step2
+
+step2 -> exists_check
+exists_check -> failed: "No"
+exists_check -> scripts_check: "Yes"
+scripts_check -> warning_scripts: "Yes (npm)"
+scripts_check -> step3: "No"
+warning_scripts -> step3
+
+step3 -> docker_check
+docker_check -> skip_container: "No"
+docker_check -> container_steps: "Yes"
+skip_container -> result
+
+container_steps -> suspicious_check
+suspicious_check -> blocked_container: "Yes"
+suspicious_check -> result: "No"
+
+result -> pass: "No warnings"
+result -> warning_final: "Has warnings"
+
+# Network monitoring detail
+network_monitor: {
+  label: Network Monitoring
+  shape: rectangle
+  style.fill: "#E8F5E9"
+  style.stroke-dash: 3
+
+  suspicious_ports: "Suspicious Ports\n(4444, 1337, 6666)"
+  dns_exfil: "Excessive DNS\n(>50 queries)"
+  suspicious_urls: "Suspicious URLs\n(ngrok, pastebin)"
+}
+
+# FS monitoring detail
+fs_monitor: {
+  label: Filesystem Monitoring
+  shape: rectangle
+  style.fill: "#FFF3E0"
+  style.stroke-dash: 3
+
+  sensitive_paths: "Writes to /etc,\n/root, /home"
+  cron_writes: "Cron job creation"
+}
+
+# Process monitoring detail
+proc_monitor: {
+  label: Process Monitoring
+  shape: rectangle
+  style.fill: "#FCE4EC"
+  style.stroke-dash: 3
+
+  reverse_shell: "Reverse shells\n(nc -e, bash -i)"
+  miners: "Crypto miners\n(xmrig, stratum)"
+}
+
+container_steps.monitor -> network_monitor
+container_steps.monitor -> fs_monitor
+container_steps.monitor -> proc_monitor

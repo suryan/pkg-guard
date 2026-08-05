@@ -1,0 +1,8 @@
+# OSV Scanner configuration for pkg-guard
+# Add vulnerability IDs here to ignore known issues in transitive deps
+# that cannot be fixed without upstream changes.
+
+# Example:
+# [[IgnoredVulns]]
+# id = "RUSTSEC-2024-XXXX"
+# reason = "Transitive dep pinned by upstream — awaiting fix"

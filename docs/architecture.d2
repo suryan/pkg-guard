@@ -1,0 +1,152 @@
+# pkg-guard Architecture Diagram
+
+direction: down
+
+title: {
+  label: pkg-guard Architecture
+  near: top-center
+  shape: text
+  style.font-size: 24
+  style.bold: true
+}
+
+# External interfaces
+cli: CLI (Terminal) {
+  shape: person
+  style.fill: "#E8F5E9"
+}
+
+ide: IDE / Kiro {
+  shape: person
+  style.fill: "#E3F2FD"
+}
+
+# Entry points
+entry: {
+  label: Entry Points
+  style.fill: "#FFF3E0"
+
+  clap: "clap CLI Parser" {
+    shape: rectangle
+  }
+
+  mcp_server: "MCP Server\n(JSON-RPC stdio)" {
+    shape: rectangle
+  }
+}
+
+cli -> entry.clap: "pkg-guard <cmd>"
+ide -> entry.mcp_server: "JSON-RPC 2.0"
+
+# Core modules
+core: {
+  label: Core Modules
+  style.fill: "#F3E5F5"
+
+  typosquat: "Typosquat Engine" {
+    shape: hexagon
+    style.fill: "#CE93D8"
+
+    levenshtein: Levenshtein
+    jaro_winkler: Jaro-Winkler
+    homoglyphs: Homoglyphs
+    patterns: Pattern Match
+  }
+
+  registry: "Registry Clients" {
+    shape: hexagon
+    style.fill: "#90CAF9"
+
+    pypi: PyPI
+    npm: npm
+    maven: Maven Central
+  }
+
+  parsers: "Dependency Parsers" {
+    shape: hexagon
+    style.fill: "#A5D6A7"
+
+    requirements: requirements.txt
+    package_json: package.json
+    pom: pom.xml
+    gradle: build.gradle
+  }
+
+  audit: "Container Auditor" {
+    shape: hexagon
+    style.fill: "#FFAB91"
+
+    docker_api: "bollard\n(Docker API)"
+    monitor_net: Network Monitor
+    monitor_fs: FS Monitor
+    monitor_proc: Process Monitor
+  }
+
+  data: "Data Layer" {
+    shape: cylinder
+    style.fill: "#FFF59D"
+
+    blocklist: Blocklist (HashSet)
+    popular: Popular Packages
+    types: Shared Types
+  }
+}
+
+entry.clap -> core.typosquat: check
+entry.clap -> core.parsers: pin, scan
+entry.clap -> core.audit: audit
+
+entry.mcp_server -> core.typosquat: check_typosquat
+entry.mcp_server -> core.registry: get_package_metadata
+entry.mcp_server -> core.parsers: pin_dependencies\nscan_lockfile
+entry.mcp_server -> core.audit: audit_package
+
+core.typosquat -> core.data: lookup blocklist\n& popular pkgs
+core.audit -> core.typosquat: step 1
+core.audit -> core.registry: step 2
+core.audit -> core.audit.docker_api: step 3
+core.parsers -> core.data: scan against blocklist
+
+# External services
+external: {
+  label: External Services
+  style.fill: "#ECEFF1"
+
+  pypi_api: "PyPI API\npypi.org" {
+    shape: cloud
+  }
+
+  npm_api: "npm Registry\nregistry.npmjs.org" {
+    shape: cloud
+  }
+
+  maven_api: "Maven Central\nsearch.maven.org" {
+    shape: cloud
+  }
+
+  docker: "Docker Daemon\n(local)" {
+    shape: cloud
+  }
+}
+
+core.registry.pypi -> external.pypi_api: HTTPS
+core.registry.npm -> external.npm_api: HTTPS
+core.registry.maven -> external.maven_api: HTTPS
+core.audit.docker_api -> external.docker: Unix socket
+
+# Container detail
+container: "Audit Container" {
+  style.fill: "#FFCDD2"
+  style.stroke: "#B71C1C"
+  style.stroke-dash: 3
+
+  base_image: "Base Image\n(python/node/maven)"
+  install: "Package Install"
+  monitor: "Behavior Monitor"
+  report: "JSON Report"
+
+  base_image -> install -> monitor -> report
+}
+
+external.docker -> container: creates
+container -> core.audit: results (JSON)
