@@ -339,13 +339,9 @@ mod tests {
             .await
             .expect("online query");
         assert_eq!(r.source.as_deref(), Some("online"));
-        let batch = query_batch(&[(
-            Ecosystem::Cargo,
-            "serde".into(),
-            "1.0.200".into(),
-        )])
-        .await
-        .expect("online batch");
+        let batch = query_batch(&[(Ecosystem::Cargo, "serde".into(), "1.0.200".into())])
+            .await
+            .expect("online batch");
         assert!(!batch.is_empty());
         assert_eq!(batch[0].source.as_deref(), Some("online"));
         std::env::remove_var("PKG_GUARD_OSV_MODE");
