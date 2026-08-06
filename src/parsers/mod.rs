@@ -18,7 +18,7 @@ use crate::data::blocklist::is_blocklisted;
 use crate::data::{Ecosystem, MaliciousFinding, PinResult, PinnedDep, ScanResult, UnpinnedDep};
 
 mod scan_status;
-use scan_status::{build_scan_result, compose_scan_status, format_scan_scope};
+use scan_status::{build_scan_result, compose_scan_status};
 
 /// Scan a dependency file and report pinning status.
 ///
