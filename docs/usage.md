@@ -145,36 +145,81 @@ MCP: `osv_status`, `osv_update` (optional `ecosystems: string[]`), plus `blockli
 
 ## Transparent package-manager shims
 
-`pkg-guard` can **look like** `pip` / `npm` / `cargo` (multicall via symlink). On
-install-like commands it runs policy checks, then `exec`s the real tool.
+`pkg-guard` can **look like** `pip` / `npm` / `npx` / `uvx` / `uv` / `cargo`
+(multicall via symlink). On install-like or package-run commands it runs policy
+checks, then `exec`s the real tool.
+
+### MCP launchers (`uvx` / `npx`) — the real gap
+
+Many MCP servers start as:
+
+```json
+"command": "uvx",
+"args": ["mcp-atlassian==0.23.0"]
+```
+
+or:
+
+```json
+"command": "npx",
+"args": ["-y", "@modelcontextprotocol/server-filesystem@0.6.2"]
+```
+
+That is **not** a lockfile scan. `uvx`/`npx` resolve the named package **and**
+all of its **transitive dependencies** from the registry. A compromise can live
+in a dep you never typed.
+
+**What shims do today**
+
+| Launcher | Gated |
+|----------|--------|
+| `uvx pkg==ver` / `uv tool run …` | Top-level package name (+ version OSV if pinned) |
+| `npx -y pkg@ver` / `pnpm dlx` / `yarn dlx` | Top-level package name (+ version if present) |
+| `pip install` / `npm install` / `cargo add` | As before |
+
+**What they do *not* do yet**
+
+- Fully resolve and audit the **entire** transitive tree *before* `uvx`/`npx` runs
+- Stop absolute-path launches (`/home/…/.local/bin/uvx` if not shimmed first on `PATH`)
+
+**Practical controls**
+
+1. Install shims so `uvx`/`npx` on `PATH` hit pkg-guard first  
+2. **Pin versions** in MCP config (`pkg==1.2.3`, `pkg@1.2.3`) so OSV can match  
+3. Keep **local OSV dumps** fresh (`pkg-guard osv update`)  
+4. Prefer custom/feed **blocklists** for known-bad names  
+5. For high-trust MCP tools, prefer a **vendored/binary** install over floating `uvx`/`npx`  
 
 ### Issues with transparent calls (and mitigations)
 
 | Issue | Mitigation |
 |-------|------------|
 | Recursion (`pip` → pkg-guard → `pip` → …) | Real binary resolution **skips this executable**; override with `PKG_GUARD_REAL_PIP` etc. |
-| Bypass via `/usr/bin/pip` | Documented; shims only work when early on `PATH` |
-| Incomplete CLI parsing | Only common install forms gated; exotic URLs/paths pass through or skip |
-| Slow gates | Default is name blocklist + OSV when version known; **no** Docker audit on every install |
-| Scripts calling absolute paths | CI still needs `pkg-guard project` / scan |
+| Bypass via `/usr/bin/pip` or absolute path | Shims only work when early on `PATH` |
+| MCP `uvx`/`npx` transitive deps | Gate top-level package; pin versions; OSV + blocklists; residual tree risk |
+| Incomplete CLI parsing | Common install/run forms gated; exotic URLs/paths pass through or skip |
+| Slow gates | Blocklist + OSV when version known; **no** Docker audit on every install |
 
 ### Install shims
 
 ```bash
 cargo build --release
-cp target/release/pkg-guard ~/.local/bin/
-pkg-guard shim install --dir ~/.local/bin
+# or: make install
+pkg-guard shim install --dir ~/.local/bin \
+  --tools pip,pip3,npm,npx,uvx,uv,cargo
 # ensure ~/.local/bin is before /usr/bin on PATH
 pkg-guard shim status
 
 # Modes
-export PKG_GUARD_SHIM_MODE=enforce   # default: block bad installs
-export PKG_GUARD_SHIM_MODE=warn      # print warning, still install
+export PKG_GUARD_SHIM_MODE=enforce   # default: block bad installs / bad MCP packages
+export PKG_GUARD_SHIM_MODE=warn      # print warning, still run
 export PKG_GUARD_SHIM_MODE=off       # fully transparent
 
 # Point at the real tools if auto-detect fails
 export PKG_GUARD_REAL_PIP=/usr/bin/pip3
 export PKG_GUARD_REAL_NPM=/usr/bin/npm
+export PKG_GUARD_REAL_NPX=/usr/bin/npx
+export PKG_GUARD_REAL_UVX=$HOME/.local/bin/uvx   # real binary, not the shim
 export PKG_GUARD_REAL_CARGO=$HOME/.cargo/bin/cargo
 ```
 
@@ -184,6 +229,8 @@ Then:
 pip install requests==2.31.0     # gated, then real pip
 pip install reqeusts             # BLOCKED if on feed/custom blocklist
 npm install lodash@4.17.21
+npx -y left-pad@1.3.0            # gated (top-level)
+uvx mcp-atlassian==0.23.0        # gated (top-level MCP package)
 cargo add serde@1.0
 pip list                         # pass-through, no gate
 ```

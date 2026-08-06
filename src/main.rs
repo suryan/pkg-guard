@@ -127,20 +127,20 @@ enum ShimCmd {
         #[arg(long, short = 'd')]
         dir: Option<PathBuf>,
         /// Comma-separated tools (default: pip,pip3,npm,npx,cargo)
-        #[arg(long, default_value = "pip,pip3,npm,npx,cargo")]
+        #[arg(long, default_value = "pip,pip3,npm,npx,uvx,uv,cargo")]
         tools: String,
     },
     /// Show shim mode, real binaries, and env overrides
     Status {
         /// Comma-separated tools to inspect
-        #[arg(long, default_value = "pip,pip3,npm,npx,cargo")]
+        #[arg(long, default_value = "pip,pip3,npm,npx,uvx,uv,cargo")]
         tools: String,
     },
     /// Remove shim symlinks previously installed
     Uninstall {
         #[arg(long, short = 'd')]
         dir: Option<PathBuf>,
-        #[arg(long, default_value = "pip,pip3,npm,npx,cargo")]
+        #[arg(long, default_value = "pip,pip3,npm,npx,uvx,uv,cargo")]
         tools: String,
     },
 }

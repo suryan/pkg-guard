@@ -95,8 +95,8 @@ osv-update: $(BIN) ## Download OSV dumps (ECOSYSTEMS=cargo,python or empty=all)
 osv-status: $(BIN) ## Show local OSV dump status
 	"$(BIN)" osv status
 
-shim-install: $(BIN) ## Install pip/npm/cargo shims into BINDIR
-	"$(BIN)" shim install --dir "$(BINDIR)"
+shim-install: $(BIN) ## Install pip/npm/npx/uvx/cargo shims into BINDIR
+	"$(BIN)" shim install --dir "$(BINDIR)" --tools pip,pip3,npm,npx,uvx,uv,cargo
 
 shim-status: $(BIN) ## Show shim resolution status
 	"$(BIN)" shim status

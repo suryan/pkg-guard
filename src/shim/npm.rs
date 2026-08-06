@@ -8,6 +8,13 @@ use crate::data::Ecosystem;
 /// Build a shim plan for node package managers.
 #[must_use]
 pub fn plan(tool: &str, args: &[String]) -> Plan {
+    // npx / yarn dlx / pnpm dlx: run a package (MCP servers often use this)
+    if matches!(tool, "npx" | "pnpm" | "yarn") {
+        if let Some(plan) = plan_npx_like(tool, args) {
+            return plan;
+        }
+    }
+
     let Some(cmd_idx) = args.iter().position(|a| {
         matches!(
             a.as_str(),
@@ -73,6 +80,86 @@ pub fn plan(tool: &str, args: &[String]) -> Plan {
     }
 }
 
+/// `npx -y pkg@1.0.0 …`, `pnpm dlx pkg`, `yarn dlx pkg`.
+fn plan_npx_like(tool: &str, args: &[String]) -> Option<Plan> {
+    // yarn/pnpm use explicit `dlx`
+    if tool == "yarn" || tool == "pnpm" {
+        let dlx = args.iter().position(|a| a == "dlx")?;
+        return Some(gate_npx_packages(tool, &args[dlx + 1..]));
+    }
+
+    // npx: no subcommand — first positional is the package
+    if tool == "npx" {
+        return Some(gate_npx_packages("npx", args));
+    }
+    None
+}
+
+fn gate_npx_packages(label: &str, args: &[String]) -> Plan {
+    let value_flags = [
+        "--package",
+        "-p",
+        "--prefix",
+        "--registry",
+        "--shell",
+        "--node-options",
+        "--cache",
+        "--userconfig",
+    ];
+
+    let mut packages = Vec::new();
+    let mut i = 0usize;
+    while i < args.len() {
+        let a = &args[i];
+        if a == "--" {
+            break;
+        }
+        if a.starts_with('-') {
+            let is_val = value_flags
+                .iter()
+                .any(|f| a == *f || a.starts_with(&format!("{f}=")));
+            if is_val {
+                if a.contains('=') {
+                    if let Some(v) = a.split_once('=').map(|(_, v)| v) {
+                        if let Some(pkg) = parse_npm_spec(v) {
+                            packages.push(pkg);
+                        }
+                    }
+                    i += 1;
+                } else if let Some(v) = args.get(i + 1) {
+                    if a == "--package" || a == "-p" {
+                        if let Some(pkg) = parse_npm_spec(v) {
+                            packages.push(pkg);
+                        }
+                    }
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+            // boolean flags: -y, --yes, --no-install, …
+            i += 1;
+            continue;
+        }
+        if let Some(pkg) = parse_npm_spec(a) {
+            packages.push(pkg);
+        }
+        break; // rest are args to the package binary
+    }
+
+    if packages.is_empty() {
+        return Plan::PassThrough;
+    }
+
+    Plan::Gate {
+        ecosystem: Ecosystem::Npm,
+        packages,
+        files: vec![],
+        label: label.to_string(),
+    }
+}
+
 fn has_positional_after(args: &[String]) -> bool {
     args.iter().any(|a| !a.starts_with('-'))
 }
@@ -131,6 +218,23 @@ mod tests {
     #[test]
     fn test_npm_test_passthrough() {
         assert!(matches!(plan("npm", &["test".into()]), Plan::PassThrough));
+    }
+
+    #[test]
+    fn test_npx_package_gate() {
+        match plan(
+            "npx",
+            &[
+                "-y".into(),
+                "@modelcontextprotocol/server-filesystem@0.6.0".into(),
+            ],
+        ) {
+            Plan::Gate { packages, .. } => {
+                assert_eq!(packages[0].name, "@modelcontextprotocol/server-filesystem");
+                assert_eq!(packages[0].version.as_deref(), Some("0.6.0"));
+            }
+            Plan::PassThrough => panic!("expected gate for npx package run"),
+        }
     }
 
     #[test]

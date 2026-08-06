@@ -1,12 +1,18 @@
 //! Transparent package-manager shims (multicall).
 //!
-//! When `pkg-guard` is installed as `pip` / `npm` / `cargo` (symlink or copy),
-//! it intercepts install-like subcommands, runs policy checks, then `exec`s the
-//! real tool. Non-install commands pass through unchanged.
+//! When `pkg-guard` is installed as `pip` / `npm` / `npx` / `uvx` / `cargo`
+//! (symlink or copy), it intercepts install-like / package-run commands, runs
+//! policy checks, then `exec`s the real tool.
+//!
+//! **MCP note:** many MCP servers start via `uvx pkg==…` or `npx -y pkg@…`.
+//! Those pull the named package **and** transitive deps. Shims gate the
+//! top-level package (blocklist + OSV when versioned); they do not fully
+//! resolve the dependency tree before exec.
 //!
 //! ## Known limitations (transparent calls are never perfect)
 //! - Bypass via absolute path (`/usr/bin/pip`) or clearing PATH
 //! - Incomplete coverage of exotic install forms (git URLs, local paths)
+//! - Transitive deps of `uvx`/`npx` are not fully audited before launch
 //! - Recursion risk if the "real" binary is not resolved correctly
 //! - Container `audit` is **not** run by default (too slow for every install)
 //!
@@ -18,6 +24,7 @@ pub(crate) mod gate;
 pub(crate) mod npm;
 pub(crate) mod pip;
 pub(crate) mod resolve;
+pub(crate) mod uvx;
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -30,7 +37,7 @@ use self::resolve::resolve_real_binary;
 
 /// Program names that activate shim mode (matched on `argv[0]` stem).
 const WRAPPER_NAMES: &[&str] = &[
-    "pip", "pip3", "pip2", "npm", "npx", "yarn", "pnpm", "cargo", "mvn", "gradle",
+    "pip", "pip3", "pip2", "npm", "npx", "yarn", "pnpm", "uvx", "uv", "cargo", "mvn", "gradle",
 ];
 
 /// Whether this invocation should enter transparent shim mode.
@@ -62,6 +69,8 @@ pub async fn run(program: &str, args: &[String]) -> Result<i32> {
     let plan = match stem {
         "pip" | "pip3" | "pip2" => pip::plan(args),
         "npm" | "npx" | "yarn" | "pnpm" => npm::plan(stem, args),
+        "uvx" => uvx::plan_uvx(args),
+        "uv" => uvx::plan_uv(args),
         "cargo" => cargo::plan(args),
         // Maven/Gradle: pass through for now (no reliable single-package install parse)
         "mvn" | "gradle" => Plan::PassThrough,
@@ -219,9 +228,10 @@ pub fn status_report(tools: &[&str]) -> serde_json::Value {
         "mode_env": "PKG_GUARD_SHIM_MODE=off|warn|enforce",
         "tools": rows,
         "notes": [
-            "Install: pkg-guard shim install --dir ~/.local/bin",
+            "Install: pkg-guard shim install --dir ~/.local/bin --tools pip,npm,npx,uvx,uv,cargo",
             "Ensure shim dir is before the real tools on PATH",
-            "Bypass risk: calling /usr/bin/pip directly skips the gate",
+            "MCP: uvx/npx top-level packages are gated; transitive deps still a residual risk",
+            "Bypass risk: calling /usr/bin/uvx or absolute paths skips the gate",
             "Recursion guard: real binary resolution skips this executable",
         ],
     })
@@ -236,6 +246,9 @@ mod tests {
         assert!(is_wrapper_name("pip"));
         assert!(is_wrapper_name("/usr/bin/pip3"));
         assert!(is_wrapper_name("npm"));
+        assert!(is_wrapper_name("npx"));
+        assert!(is_wrapper_name("uvx"));
+        assert!(is_wrapper_name("uv"));
         assert!(!is_wrapper_name("pkg-guard"));
         assert!(!is_wrapper_name("check"));
     }
