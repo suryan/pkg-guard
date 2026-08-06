@@ -19,6 +19,7 @@ pub struct UpdateDbResult {
     pub python: usize,
     pub npm: usize,
     pub java: usize,
+    pub cargo: usize,
     pub sources: Vec<String>,
     pub feeds_ok: Vec<String>,
     pub feeds_failed: Vec<String>,
@@ -91,7 +92,7 @@ pub async fn update_db(extra_feeds: &[String]) -> Result<UpdateDbResult> {
     );
 
     let path = feed_cache::write_cache(&doc)?;
-    let (seed_py, seed_npm, seed_java) = seed_entry_counts();
+    let (seed_py, seed_npm, seed_java, seed_cargo) = seed_entry_counts();
 
     let message = if feeds_failed.is_empty() && urls.is_empty() {
         format!(
@@ -112,7 +113,8 @@ pub async fn update_db(extra_feeds: &[String]) -> Result<UpdateDbResult> {
         )
     } else {
         format!(
-            "All remote feeds failed; wrote seed-only cache ({} packages). seed py/npm/java={seed_py}/{seed_npm}/{seed_java}",
+            "All remote feeds failed; wrote seed-only cache ({} packages). \
+             seed py/npm/java/cargo={seed_py}/{seed_npm}/{seed_java}/{seed_cargo}",
             doc.total_entries()
         )
     };
@@ -123,6 +125,7 @@ pub async fn update_db(extra_feeds: &[String]) -> Result<UpdateDbResult> {
         python: doc.python.len(),
         npm: doc.npm.len(),
         java: doc.java.len(),
+        cargo: doc.cargo.len(),
         sources: doc.sources,
         feeds_ok,
         feeds_failed,

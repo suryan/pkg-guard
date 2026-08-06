@@ -129,6 +129,7 @@ The `audit_package` tool is intentionally not auto-approved since it launches Do
 | Python | PyPI | requirements.txt | Pipfile.lock |
 | npm | npmjs.org | package.json | package-lock.json, yarn.lock |
 | Java | Maven Central | pom.xml, build.gradle | — |
+| Cargo / Rust | crates.io | — | Cargo.lock |
 
 ## Requirements
 

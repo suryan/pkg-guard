@@ -78,10 +78,12 @@ pub fn scan_lockfile(file_path: &str) -> Result<ScanResult> {
         scan_requirements_as_lockfile(&content)
     } else if filename == "Pipfile.lock" {
         scan_pipfile_lock(&content)?
+    } else if filename == "Cargo.lock" {
+        scan_cargo_lockfile(&content)
     } else {
         return Err(anyhow!(
             "Unsupported lock file: '{filename}'. \
-             Supported: package-lock.json, yarn.lock, requirements.txt, Pipfile.lock"
+             Supported: package-lock.json, yarn.lock, requirements.txt, Pipfile.lock, Cargo.lock"
         ));
     };
 
@@ -175,10 +177,72 @@ fn extract_resolved_packages(file_path: &str) -> Result<Vec<(Ecosystem, String, 
         Ok(extract_requirements_packages(&content))
     } else if filename == "Pipfile.lock" {
         extract_pipfile_packages(&content)
+    } else if filename == "Cargo.lock" {
+        Ok(extract_cargo_packages(&content))
     } else {
         // yarn.lock version extraction not implemented yet
         Ok(vec![])
     }
+}
+
+fn scan_cargo_lockfile(content: &str) -> Vec<MaliciousFinding> {
+    let mut findings = Vec::new();
+    for (name, version) in parse_cargo_lock_entries(content) {
+        if is_blocklisted(Ecosystem::Cargo, &name) {
+            findings.push(MaliciousFinding {
+                package: name,
+                version: Some(version),
+                severity: "CRITICAL".to_string(),
+                reason: "Package is on the known-malicious blocklist".to_string(),
+            });
+        }
+    }
+    findings
+}
+
+fn extract_cargo_packages(content: &str) -> Vec<(Ecosystem, String, String)> {
+    parse_cargo_lock_entries(content)
+        .into_iter()
+        .map(|(n, v)| (Ecosystem::Cargo, n, v))
+        .collect()
+}
+
+/// Parse `[[package]]` name/version pairs from a Cargo.lock.
+fn parse_cargo_lock_entries(content: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut current_name: Option<String> = None;
+    let mut current_version: Option<String> = None;
+    let mut in_package = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[[package]]" {
+            if let (Some(n), Some(v)) = (current_name.take(), current_version.take()) {
+                out.push((n, v));
+            }
+            in_package = true;
+            continue;
+        }
+        if !in_package {
+            continue;
+        }
+        if trimmed.starts_with('[') && trimmed != "[[package]]" {
+            if let (Some(n), Some(v)) = (current_name.take(), current_version.take()) {
+                out.push((n, v));
+            }
+            in_package = false;
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("name = ") {
+            current_name = Some(rest.trim().trim_matches('"').to_string());
+        } else if let Some(rest) = trimmed.strip_prefix("version = ") {
+            current_version = Some(rest.trim().trim_matches('"').to_string());
+        }
+    }
+    if let (Some(n), Some(v)) = (current_name, current_version) {
+        out.push((n, v));
+    }
+    out
 }
 
 fn extract_npm_packages(content: &str) -> Result<Vec<(Ecosystem, String, String)>> {
@@ -871,6 +935,25 @@ mod tests {
         let findings = scan_requirements_as_lockfile(content);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].package, "reqeusts");
+    }
+
+    #[test]
+    fn test_parse_cargo_lock_entries() {
+        let content = r#"
+[[package]]
+name = "serde"
+version = "1.0.200"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "tokio"
+version = "1.40.0"
+"#;
+        let entries = parse_cargo_lock_entries(content);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0, "serde");
+        assert_eq!(entries[0].1, "1.0.200");
+        assert_eq!(entries[1].0, "tokio");
     }
 
     #[test]

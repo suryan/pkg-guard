@@ -19,6 +19,8 @@ pub enum Ecosystem {
     Npm,
     /// Java packages (Maven/Gradle)
     Java,
+    /// Rust packages (crates.io / Cargo)
+    Cargo,
 }
 
 impl Ecosystem {
@@ -31,8 +33,9 @@ impl Ecosystem {
             "python" | "pip" | "pypi" => Ok(Self::Python),
             "npm" | "node" | "nodejs" => Ok(Self::Npm),
             "java" | "maven" | "gradle" => Ok(Self::Java),
+            "cargo" | "rust" | "crates" | "crates.io" => Ok(Self::Cargo),
             _ => Err(anyhow!(
-                "Unsupported ecosystem: '{s}'. Use: python, npm, or java"
+                "Unsupported ecosystem: '{s}'. Use: python, npm, java, or cargo"
             )),
         }
     }
@@ -44,6 +47,7 @@ impl std::fmt::Display for Ecosystem {
             Self::Python => write!(f, "python"),
             Self::Npm => write!(f, "npm"),
             Self::Java => write!(f, "java"),
+            Self::Cargo => write!(f, "cargo"),
         }
     }
 }

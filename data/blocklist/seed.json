@@ -140,5 +140,6 @@
     "io.github.nichetoolkit:jts-toolkit",
     "bytecode-viewer",
     "org.webjars.npm:malicious-package-example"
-  ]
+  ],
+  "cargo": []
 }

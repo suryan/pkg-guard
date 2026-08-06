@@ -45,6 +45,8 @@ struct BlocklistFile {
     npm: Vec<String>,
     #[serde(default)]
     java: Vec<String>,
+    #[serde(default)]
+    cargo: Vec<String>,
 }
 
 /// Merged runtime view of all custom lists.
@@ -53,6 +55,7 @@ pub struct CustomBlocklist {
     python: HashSet<String>,
     npm: HashSet<String>,
     java: HashSet<String>,
+    cargo: HashSet<String>,
     /// Paths that were successfully loaded (for diagnostics).
     pub loaded_paths: Vec<PathBuf>,
     /// Paths that existed but failed to parse.
@@ -68,6 +71,7 @@ impl CustomBlocklist {
             Ecosystem::Python => self.python.contains(&name),
             Ecosystem::Npm => self.npm.contains(&name),
             Ecosystem::Java => self.java.contains(&name),
+            Ecosystem::Cargo => self.cargo.contains(&name),
         }
     }
 
@@ -81,6 +85,9 @@ impl CustomBlocklist {
         for name in file.java {
             self.java.insert(name.to_lowercase());
         }
+        for name in file.cargo {
+            self.cargo.insert(name.to_lowercase());
+        }
         self.loaded_paths.push(path.to_path_buf());
         if let Some(v) = file.version {
             debug!("Loaded custom blocklist {} (version {v})", path.display());
@@ -92,7 +99,7 @@ impl CustomBlocklist {
     /// Total custom entries across ecosystems.
     #[must_use]
     pub fn total_entries(&self) -> usize {
-        self.python.len() + self.npm.len() + self.java.len()
+        self.python.len() + self.npm.len() + self.java.len() + self.cargo.len()
     }
 }
 
@@ -229,7 +236,8 @@ pub fn write_example(path: &Path) -> anyhow::Result<()> {
     "example-malicious-package"
   ],
   "npm": [],
-  "java": []
+  "java": [],
+  "cargo": []
 }
 "#;
     fs::write(path, example)?;
@@ -251,6 +259,7 @@ mod tests {
                 python: vec!["Evil-Pkg".to_string()],
                 npm: vec![],
                 java: vec![],
+                cargo: vec![],
             },
         );
         assert!(c.contains(Ecosystem::Python, "evil-pkg"));

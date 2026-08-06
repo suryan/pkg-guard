@@ -64,6 +64,7 @@ fn osv_ecosystem(eco: Ecosystem) -> &'static str {
         Ecosystem::Python => "PyPI",
         Ecosystem::Npm => "npm",
         Ecosystem::Java => "Maven",
+        Ecosystem::Cargo => "crates.io",
     }
 }
 
@@ -316,6 +317,7 @@ mod tests {
         assert_eq!(osv_ecosystem(Ecosystem::Python), "PyPI");
         assert_eq!(osv_ecosystem(Ecosystem::Npm), "npm");
         assert_eq!(osv_ecosystem(Ecosystem::Java), "Maven");
+        assert_eq!(osv_ecosystem(Ecosystem::Cargo), "crates.io");
     }
 
     #[test]

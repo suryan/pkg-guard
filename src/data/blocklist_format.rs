@@ -23,6 +23,8 @@ pub struct BlocklistDocument {
     pub npm: Vec<String>,
     #[serde(default)]
     pub java: Vec<String>,
+    #[serde(default)]
+    pub cargo: Vec<String>,
 }
 
 impl BlocklistDocument {
@@ -43,6 +45,11 @@ impl BlocklistDocument {
                 self.java.push(name.to_lowercase());
             }
         }
+        for name in &other.cargo {
+            if !self.cargo.iter().any(|x| x.eq_ignore_ascii_case(name)) {
+                self.cargo.push(name.to_lowercase());
+            }
+        }
         for s in &other.sources {
             if !self.sources.contains(s) {
                 self.sources.push(s.clone());
@@ -55,11 +62,12 @@ impl BlocklistDocument {
         self.python = dedupe_lower(&self.python);
         self.npm = dedupe_lower(&self.npm);
         self.java = dedupe_lower(&self.java);
+        self.cargo = dedupe_lower(&self.cargo);
     }
 
     #[must_use]
     pub fn total_entries(&self) -> usize {
-        self.python.len() + self.npm.len() + self.java.len()
+        self.python.len() + self.npm.len() + self.java.len() + self.cargo.len()
     }
 
     #[must_use]
@@ -68,6 +76,7 @@ impl BlocklistDocument {
             python: self.python.iter().map(|s| s.to_lowercase()).collect(),
             npm: self.npm.iter().map(|s| s.to_lowercase()).collect(),
             java: self.java.iter().map(|s| s.to_lowercase()).collect(),
+            cargo: self.cargo.iter().map(|s| s.to_lowercase()).collect(),
         }
     }
 }
@@ -78,6 +87,7 @@ pub struct EcosystemSets {
     pub python: HashSet<String>,
     pub npm: HashSet<String>,
     pub java: HashSet<String>,
+    pub cargo: HashSet<String>,
 }
 
 impl EcosystemSets {
@@ -88,12 +98,13 @@ impl EcosystemSets {
             super::Ecosystem::Python => self.python.contains(&name),
             super::Ecosystem::Npm => self.npm.contains(&name),
             super::Ecosystem::Java => self.java.contains(&name),
+            super::Ecosystem::Cargo => self.cargo.contains(&name),
         }
     }
 
     #[must_use]
     pub fn total(&self) -> usize {
-        self.python.len() + self.npm.len() + self.java.len()
+        self.python.len() + self.npm.len() + self.java.len() + self.cargo.len()
     }
 }
 

@@ -38,6 +38,7 @@ pub async fn get_package_metadata(
         Ecosystem::Python => fetch_pypi(package_name, version).await,
         Ecosystem::Npm => fetch_npm(package_name, version).await,
         Ecosystem::Java => fetch_maven(package_name, version).await,
+        Ecosystem::Cargo => fetch_crates_io(package_name, version).await,
     }
 }
 
@@ -194,6 +195,61 @@ async fn fetch_npm(package_name: &str, version: Option<&str>) -> Result<Value> {
         "dev_dependencies": latest_info.get("devDependencies"),
         "has_install_scripts": has_install_scripts,
         "time": data.get("time"),
+    }))
+}
+
+// ─── crates.io ───────────────────────────────────────────────────────────────
+
+async fn fetch_crates_io(package_name: &str, version: Option<&str>) -> Result<Value> {
+    let client = http_client()?;
+    let url = match version {
+        Some(v) => format!("https://crates.io/api/v1/crates/{package_name}/{v}"),
+        None => format!("https://crates.io/api/v1/crates/{package_name}"),
+    };
+    debug!("Fetching crates.io metadata: {url}");
+
+    let response = client
+        .get(&url)
+        .header("Accept", "application/json")
+        .send()
+        .await?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(serde_json::json!({
+            "exists": false,
+            "error": format!("Package '{package_name}' not found on crates.io")
+        }));
+    }
+
+    let response = response.error_for_status()?;
+    let data: Value = response.json().await?;
+
+    if let Some(v) = version {
+        let ver = data.get("version").cloned().unwrap_or(Value::Null);
+        return Ok(serde_json::json!({
+            "exists": true,
+            "registry": "crates.io",
+            "name": package_name,
+            "version": v,
+            "crate": data.get("crate"),
+            "version_info": ver,
+        }));
+    }
+
+    let krate = data
+        .get("crate")
+        .cloned()
+        .unwrap_or(Value::Object(Map::default()));
+    Ok(serde_json::json!({
+        "exists": true,
+        "registry": "crates.io",
+        "name": krate.get("name"),
+        "latest_version": krate.get("max_version").or_else(|| krate.get("newest_version")),
+        "description": krate.get("description"),
+        "repository": krate.get("repository"),
+        "homepage": krate.get("homepage"),
+        "license": krate.get("license"),
+        "downloads": krate.get("downloads"),
     }))
 }
 

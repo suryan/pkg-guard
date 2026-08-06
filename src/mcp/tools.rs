@@ -29,7 +29,7 @@ fn audit_package_tool() -> ToolDefinition {
             "properties": {
                 "ecosystem": {
                     "type": "string",
-                    "enum": ["python", "npm", "java"],
+                    "enum": ["python", "npm", "java", "cargo"],
                     "description": "Package ecosystem"
                 },
                 "package_name": {
@@ -73,7 +73,7 @@ fn check_typosquat_tool() -> ToolDefinition {
             "properties": {
                 "ecosystem": {
                     "type": "string",
-                    "enum": ["python", "npm", "java"],
+                    "enum": ["python", "npm", "java", "cargo"],
                     "description": "Package ecosystem"
                 },
                 "package_name": {
@@ -147,7 +147,7 @@ fn get_package_metadata_tool() -> ToolDefinition {
             "properties": {
                 "ecosystem": {
                     "type": "string",
-                    "enum": ["python", "npm", "java"],
+                    "enum": ["python", "npm", "java", "cargo"],
                     "description": "Package ecosystem"
                 },
                 "package_name": {

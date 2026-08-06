@@ -193,7 +193,7 @@ fn run_blocklist_cmd(action: BlocklistCmd) -> anyhow::Result<()> {
 
 fn print_blocklist_status() -> anyhow::Result<()> {
     let snap = data::custom_blocklist::snapshot();
-    let (seed_py, seed_npm, seed_java) = data::blocklist::seed_entry_counts();
+    let (seed_py, seed_npm, seed_java, seed_cargo) = data::blocklist::seed_entry_counts();
     let status = serde_json::json!({
         "lookup_order": ["custom", "feed_cache", "seed"],
         "custom": {
@@ -208,6 +208,7 @@ fn print_blocklist_status() -> anyhow::Result<()> {
             "python": seed_py,
             "npm": seed_npm,
             "java": seed_java,
+            "cargo": seed_cargo,
         },
         "hints": [
             "Brand-new threats: edit custom list (pkg-guard blocklist init)",

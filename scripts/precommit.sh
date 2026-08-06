@@ -45,8 +45,8 @@ if ! cargo test > /dev/null 2>&1; then
 fi
 echo "  PASS"
 
-# 5. OSV vulnerability scan
-echo "[5/5] Security audit..."
+# 5. OSV vulnerability scan (external scanner if present)
+echo "[5/6] Security audit (osv-scanner)..."
 if command -v osv-scanner &> /dev/null; then
   if ! osv-scanner scan --config=osv-scanner.toml . > /dev/null 2>&1; then
     echo "  WARN: Vulnerabilities detected (non-blocking)"
@@ -56,6 +56,34 @@ if command -v osv-scanner &> /dev/null; then
   fi
 else
   echo "  SKIP (osv-scanner not installed)"
+fi
+
+# 6. Dogfood: scan Cargo.lock with pkg-guard (blocklist + OSV)
+echo "[6/6] pkg-guard Cargo.lock scan..."
+PKG_GUARD_BIN=""
+if [ -x "./target/debug/pkg-guard" ]; then
+  PKG_GUARD_BIN="./target/debug/pkg-guard"
+elif [ -x "./target/release/pkg-guard" ]; then
+  PKG_GUARD_BIN="./target/release/pkg-guard"
+elif command -v pkg-guard &> /dev/null; then
+  PKG_GUARD_BIN="pkg-guard"
+fi
+if [ -n "$PKG_GUARD_BIN" ] && [ -f Cargo.lock ]; then
+  # Network OSV may be slow/flaky in CI — fail only on blocklist CRITICAL name hits
+  SCAN_OUT=$($PKG_GUARD_BIN scan -f Cargo.lock 2>/dev/null || true)
+  if echo "$SCAN_OUT" | grep -q '"findings_count": [1-9]'; then
+    echo "  FAIL: blocklisted packages in Cargo.lock"
+    echo "$SCAN_OUT" | tail -30
+    exit 1
+  fi
+  if echo "$SCAN_OUT" | grep -q 'OSV malware'; then
+    echo "  FAIL: OSV malware advisories in Cargo.lock"
+    echo "$SCAN_OUT" | tail -30
+    exit 1
+  fi
+  echo "  PASS"
+else
+  echo "  SKIP (pkg-guard binary or Cargo.lock missing)"
 fi
 
 echo ""

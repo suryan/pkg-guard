@@ -20,6 +20,7 @@ static SEED_SETS: LazyLock<EcosystemSets> = LazyLock::new(load_seed_sets);
 static POPULAR_PYTHON: LazyLock<Vec<String>> = LazyLock::new(|| load_popular("python"));
 static POPULAR_NPM: LazyLock<Vec<String>> = LazyLock::new(|| load_popular("npm"));
 static POPULAR_JAVA: LazyLock<Vec<String>> = LazyLock::new(|| load_popular("java"));
+static POPULAR_CARGO: LazyLock<Vec<String>> = LazyLock::new(|| load_popular("cargo"));
 
 /// Seed JSON is generated from repo data files; invalid content is a build bug.
 fn load_seed_sets() -> EcosystemSets {
@@ -41,6 +42,7 @@ fn load_popular(ecosystem: &str) -> Vec<String> {
         "python" => doc.python,
         "npm" => doc.npm,
         "java" => doc.java,
+        "cargo" => doc.cargo,
         _ => vec![],
     }
 }
@@ -56,13 +58,14 @@ pub fn seed_document() -> super::blocklist_format::BlocklistDocument {
     doc
 }
 
-/// Entry counts for the compiled seed.
+/// Entry counts for the compiled seed: (python, npm, java, cargo).
 #[must_use]
-pub fn seed_entry_counts() -> (usize, usize, usize) {
+pub fn seed_entry_counts() -> (usize, usize, usize, usize) {
     (
         SEED_SETS.python.len(),
         SEED_SETS.npm.len(),
         SEED_SETS.java.len(),
+        SEED_SETS.cargo.len(),
     )
 }
 
@@ -118,6 +121,7 @@ pub fn popular_packages(ecosystem: Ecosystem) -> &'static [String] {
         Ecosystem::Python => POPULAR_PYTHON.as_slice(),
         Ecosystem::Npm => POPULAR_NPM.as_slice(),
         Ecosystem::Java => POPULAR_JAVA.as_slice(),
+        Ecosystem::Cargo => POPULAR_CARGO.as_slice(),
     }
 }
 
@@ -151,7 +155,7 @@ mod tests {
 
     #[test]
     fn test_seed_document_counts() {
-        let (py, npm, java) = seed_entry_counts();
+        let (py, npm, java, _cargo) = seed_entry_counts();
         assert!(py >= 50);
         assert!(npm >= 50);
         assert!(java >= 1);

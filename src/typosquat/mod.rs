@@ -158,7 +158,7 @@ fn normalize_name(name: &str, ecosystem: Ecosystem) -> String {
             // For Java packages in groupId:artifactId format, compare artifactId
             name.split(':').next_back().unwrap_or(name)
         }
-        Ecosystem::Python | Ecosystem::Npm => name,
+        Ecosystem::Python | Ecosystem::Npm | Ecosystem::Cargo => name,
     };
 
     name.to_lowercase().replace(['-', '_', '.'], "")

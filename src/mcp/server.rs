@@ -261,7 +261,7 @@ fn handle_audit_project(args: &Value) -> ToolCallResult {
 
 fn handle_blocklist_status() -> ToolCallResult {
     let snap = data::custom_blocklist::snapshot();
-    let (seed_py, seed_npm, seed_java) = data::blocklist::seed_entry_counts();
+    let (seed_py, seed_npm, seed_java, seed_cargo) = data::blocklist::seed_entry_counts();
     let status = serde_json::json!({
         "lookup_order": ["custom", "feed_cache", "seed"],
         "custom": {
@@ -276,6 +276,7 @@ fn handle_blocklist_status() -> ToolCallResult {
             "python": seed_py,
             "npm": seed_npm,
             "java": seed_java,
+            "cargo": seed_cargo,
         },
         "default_feeds": "data/blocklist/default-feeds.json (used by update_db when no feeds given)",
         "osv": "OSV.dev version advisories used by audit_package and scan_lockfile",

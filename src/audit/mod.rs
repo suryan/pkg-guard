@@ -494,6 +494,14 @@ mvn dependency:resolve -q"
                 ),
             )
         }
+        Ecosystem::Cargo => (
+            "rust:1.83-slim".to_string(),
+            format!(
+                "mkdir -p /install && cargo init --name audit_pkg /install >/dev/null 2>&1 \
+                 && cd /install && cargo add '{package_name}@{version}' --quiet 2>&1 \
+                 && cargo fetch --quiet 2>&1"
+            ),
+        ),
     }
 }
 
