@@ -212,9 +212,15 @@ pub struct ScanResult {
     /// Max packages sent to OSV in one scan (0 if OSV not run)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub packages_osv_cap: Option<usize>,
+    /// Configured lookup mode: `auto`, `local`, or `online` (`PKG_GUARD_OSV_MODE`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub osv_mode: Option<String>,
+    /// Backend actually used: `local` (disk dump), `online` (api.osv.dev), or `none`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub osv_backend: Option<String>,
     /// Malicious packages found (blocklist name matches)
     pub malicious_findings: Vec<MaliciousFinding>,
-    /// OSV advisories for resolved versions (when network query ran)
+    /// OSV advisories for resolved versions (when OSV ran)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub osv_findings: Vec<crate::osv::OsvAdvisory>,
     /// Number of blocklist findings

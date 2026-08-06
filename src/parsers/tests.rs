@@ -96,8 +96,9 @@ fn test_extract_xml_value() {
 
 #[test]
 fn test_format_scan_scope() {
-    assert!(format_scan_scope(0, 0, None).contains("0 packages"));
-    assert!(format_scan_scope(10, 0, None).contains("blocklist only"));
-    assert!(format_scan_scope(100, 80, Some(80)).contains("cap 80"));
-    assert!(format_scan_scope(5, 5, Some(80)).contains("OSV-checked 5"));
+    assert!(format_scan_scope(0, 0, None, Some("none")).contains("0 packages"));
+    assert!(format_scan_scope(10, 0, None, None).contains("blocklist only"));
+    assert!(format_scan_scope(100, 80, Some(80), Some("local")).contains("cap 80"));
+    assert!(format_scan_scope(100, 80, Some(80), Some("local")).contains("OSV=local"));
+    assert!(format_scan_scope(5, 5, Some(80), Some("online")).contains("online api"));
 }

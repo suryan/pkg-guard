@@ -98,6 +98,16 @@ impl OsvMode {
             _ => Self::Auto,
         }
     }
+
+    /// Stable string for JSON / status (`auto`, `local`, `online`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Local => "local",
+            Self::Online => "online",
+        }
+    }
 }
 
 pub(crate) fn osv_ecosystem(eco: Ecosystem) -> &'static str {

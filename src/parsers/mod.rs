@@ -99,6 +99,8 @@ pub fn scan_lockfile(file_path: &str) -> Result<ScanResult> {
         packages_total,
         0,
         None,
+        None,
+        None,
     ))
 }
 
@@ -113,12 +115,16 @@ pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
     result.packages_total = packages_total;
     result.packages_blocklist_checked = packages_total.max(result.packages_blocklist_checked);
 
+    let osv_mode = crate::osv::OsvMode::from_env();
+    result.osv_mode = Some(osv_mode.as_str().to_string());
+
     // Cap load for large lockfiles (local index is cheap; live API is not)
     let capped: Vec<_> = packages.into_iter().take(OSV_PACKAGE_CAP).collect();
     result.packages_osv_checked = capped.len();
     result.packages_osv_cap = Some(OSV_PACKAGE_CAP);
 
     if capped.is_empty() {
+        result.osv_backend = Some("none".into());
         result.status = compose_scan_status(
             result.findings_count,
             result.osv_count,
@@ -126,12 +132,18 @@ pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
             result.packages_total,
             result.packages_osv_checked,
             result.packages_osv_cap,
+            result.osv_backend.as_deref(),
         );
         return Ok(result);
     }
 
     match crate::osv::query_batch(&capped).await {
         Ok(batch) => {
+            let backend = batch
+                .first()
+                .and_then(|r| r.source.clone())
+                .unwrap_or_else(|| "unknown".into());
+            result.osv_backend = Some(backend);
             let mut osv_findings = Vec::new();
             for item in batch {
                 for adv in item.advisories {
@@ -147,9 +159,11 @@ pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
                 result.packages_total,
                 result.packages_osv_checked,
                 result.packages_osv_cap,
+                result.osv_backend.as_deref(),
             );
         }
         Err(e) => {
+            result.osv_backend = Some("failed".into());
             result.status = format!(
                 "{}; OSV lookup failed: {e}",
                 compose_scan_status(
@@ -159,6 +173,7 @@ pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
                     result.packages_total,
                     result.packages_osv_checked,
                     result.packages_osv_cap,
+                    result.osv_backend.as_deref(),
                 )
             );
         }
@@ -197,6 +212,8 @@ fn build_scan_result(
     packages_total: usize,
     packages_osv_checked: usize,
     packages_osv_cap: Option<usize>,
+    osv_mode: Option<String>,
+    osv_backend: Option<String>,
 ) -> ScanResult {
     let findings_count = findings.len();
     let osv_count = osv_findings.len();
@@ -207,6 +224,7 @@ fn build_scan_result(
         packages_total,
         packages_osv_checked,
         packages_osv_cap,
+        osv_backend.as_deref(),
     );
     ScanResult {
         file,
@@ -214,6 +232,8 @@ fn build_scan_result(
         packages_blocklist_checked: packages_total,
         packages_osv_checked,
         packages_osv_cap,
+        osv_mode,
+        osv_backend,
         malicious_findings: findings,
         osv_findings,
         findings_count,
@@ -229,8 +249,14 @@ fn compose_scan_status(
     packages_total: usize,
     packages_osv_checked: usize,
     packages_osv_cap: Option<usize>,
+    osv_backend: Option<&str>,
 ) -> String {
-    let scope = format_scan_scope(packages_total, packages_osv_checked, packages_osv_cap);
+    let scope = format_scan_scope(
+        packages_total,
+        packages_osv_checked,
+        packages_osv_cap,
+        osv_backend,
+    );
     let malware = osv.iter().filter(|a| a.is_malware).count();
     if blocklist_count > 0 || malware > 0 {
         format!(
@@ -247,20 +273,29 @@ fn format_scan_scope(
     packages_total: usize,
     packages_osv_checked: usize,
     packages_osv_cap: Option<usize>,
+    osv_backend: Option<&str>,
 ) -> String {
+    let backend = match osv_backend {
+        Some("local") => "OSV=local dump",
+        Some("online") => "OSV=online api.osv.dev",
+        Some("failed") => "OSV=failed",
+        Some("none") => "OSV=skipped",
+        Some(other) => other,
+        None => "OSV=n/a",
+    };
     if packages_total == 0 {
-        return "scanned 0 packages".to_string();
+        return format!("scanned 0 packages ({backend})");
     }
     if packages_osv_checked == 0 {
-        return format!("scanned {packages_total} package(s) (blocklist only; no OSV query)");
+        return format!("scanned {packages_total} package(s) (blocklist only; {backend})");
     }
     if packages_osv_checked < packages_total {
         let cap = packages_osv_cap.unwrap_or(packages_osv_checked);
         return format!(
-            "scanned {packages_total} package(s), OSV-checked {packages_osv_checked} (cap {cap})"
+            "scanned {packages_total} package(s), OSV-checked {packages_osv_checked} (cap {cap}, {backend})"
         );
     }
-    format!("scanned {packages_total} package(s), OSV-checked {packages_osv_checked}")
+    format!("scanned {packages_total} package(s), OSV-checked {packages_osv_checked} ({backend})")
 }
 
 /// Extract (ecosystem, name, version) triples from a lock/requirements file.
