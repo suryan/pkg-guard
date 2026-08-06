@@ -86,26 +86,37 @@ core: {
     shape: cylinder
     style.fill: "#FFF59D"
 
-    blocklist: Blocklist (HashSet)
-    popular: Popular Packages
+    custom: "Custom blocklist\n(user/project/env)"
+    feed: "Feed cache\n(~/.cache/pkg-guard)"
+    seed: "Seed JSON\n(data/blocklist/seed.json)"
+    popular: "Popular packages\n(data/blocklist/popular.json)"
     types: Shared Types
+  }
+
+  project: "Project Auditor" {
+    shape: hexagon
+    style.fill: "#B0BEC5"
   }
 }
 
 entry.clap -> core.typosquat: check
 entry.clap -> core.parsers: pin, scan
 entry.clap -> core.audit: audit
+entry.clap -> core.project: project
+entry.clap -> core.data: "blocklist status\nupdate-db"
 
 entry.mcp_server -> core.typosquat: check_typosquat
 entry.mcp_server -> core.registry: get_package_metadata
 entry.mcp_server -> core.parsers: pin_dependencies\nscan_lockfile
 entry.mcp_server -> core.audit: audit_package
+entry.mcp_server -> core.project: audit_project
 
-core.typosquat -> core.data: lookup blocklist\n& popular pkgs
+core.typosquat -> core.data: "lookup: custom → feed → seed\n+ popular pkgs"
 core.audit -> core.typosquat: step 1
 core.audit -> core.registry: step 2
 core.audit -> core.audit.docker_api: step 3
 core.parsers -> core.data: scan against blocklist
+core.project -> core.parsers: pin + scan tree
 
 # External services
 external: {
@@ -127,12 +138,17 @@ external: {
   docker: "Docker Daemon\n(local)" {
     shape: cloud
   }
+
+  feeds: "Optional feed URLs\n(PKG_GUARD_FEED_URLS)" {
+    shape: cloud
+  }
 }
 
 core.registry.pypi -> external.pypi_api: HTTPS
 core.registry.npm -> external.npm_api: HTTPS
 core.registry.maven -> external.maven_api: HTTPS
 core.audit.docker_api -> external.docker: Unix socket
+core.data -> external.feeds: "update-db fetch"
 
 # Container detail
 container: "Audit Container" {
