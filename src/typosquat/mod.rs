@@ -9,7 +9,10 @@
 
 use strsim::{jaro_winkler, levenshtein};
 
-use crate::data::blocklist::{blocklist_source, popular_packages, BlocklistSource};
+use crate::data::blocklist::{
+    blocklist_source, feed_cache_is_stale, popular_packages, BlocklistSource,
+};
+use crate::data::feed_cache;
 use crate::data::{Ecosystem, TyposquatResult};
 
 /// Homoglyph pairs — characters that look similar in many fonts
@@ -34,28 +37,26 @@ const MAX_LEVENSHTEIN_DISTANCE: usize = 2;
 pub fn check_typosquat(ecosystem: Ecosystem, package_name: &str) -> TyposquatResult {
     match blocklist_source(ecosystem, package_name) {
         BlocklistSource::Custom => {
-            return TyposquatResult {
-                is_suspicious: true,
-                is_blocklisted: true,
-                blocklist_source: Some("custom".to_string()),
-                similar_to: vec![],
-                min_levenshtein_distance: None,
-                recommendation: "BLOCKED — package is on your custom blocklist \
-                     (user/project/env). Remove it from the custom list only if \
-                     you intended to allow it."
-                    .to_string(),
-            };
+            return blocked_result(
+                "custom",
+                "BLOCKED — package is on your custom blocklist \
+                 (user/project/env). Remove it from the custom list only if \
+                 you intended to allow it.",
+            );
+        }
+        BlocklistSource::Feed => {
+            return blocked_result(
+                "feed",
+                "BLOCKED — package is on the feed cache blocklist \
+                 (from `pkg-guard update-db`).",
+            );
         }
         BlocklistSource::Builtin => {
-            return TyposquatResult {
-                is_suspicious: true,
-                is_blocklisted: true,
-                blocklist_source: Some("builtin".to_string()),
-                similar_to: vec![],
-                min_levenshtein_distance: None,
-                recommendation: "BLOCKED — package is on the built-in malicious blocklist"
-                    .to_string(),
-            };
+            return blocked_result(
+                "builtin",
+                "BLOCKED — package is on the built-in seed blocklist \
+                 (data/blocklist/seed.json).",
+            );
         }
         BlocklistSource::None => {}
     }
@@ -65,19 +66,19 @@ pub fn check_typosquat(ecosystem: Ecosystem, package_name: &str) -> TyposquatRes
 
     let pkg_normalized = normalize_name(package_name, ecosystem);
 
-    for &popular_pkg in popular {
+    for popular_pkg in popular {
         let pop_normalized = normalize_name(popular_pkg, ecosystem);
 
         // Skip exact matches — that's the real package
         if pkg_normalized == pop_normalized {
-            return TyposquatResult {
+            return with_stale_note(TyposquatResult {
                 is_suspicious: false,
                 is_blocklisted: false,
                 blocklist_source: None,
                 similar_to: vec![],
                 min_levenshtein_distance: Some(0),
                 recommendation: "OK — this is a known legitimate package".to_string(),
-            };
+            });
         }
 
         let lev_distance = levenshtein(&pkg_normalized, &pop_normalized);
@@ -90,7 +91,7 @@ pub fn check_typosquat(ecosystem: Ecosystem, package_name: &str) -> TyposquatRes
             || is_suffix_prefix_trick(package_name, popular_pkg);
 
         if is_similar {
-            similar_packages.push((popular_pkg.to_string(), lev_distance, jw_similarity));
+            similar_packages.push((popular_pkg.clone(), lev_distance, jw_similarity));
         }
     }
 
@@ -110,7 +111,7 @@ pub fn check_typosquat(ecosystem: Ecosystem, package_name: &str) -> TyposquatRes
         "OK — no typosquat patterns detected".to_string()
     };
 
-    TyposquatResult {
+    with_stale_note(TyposquatResult {
         is_suspicious,
         is_blocklisted: false,
         blocklist_source: None,
@@ -120,7 +121,30 @@ pub fn check_typosquat(ecosystem: Ecosystem, package_name: &str) -> TyposquatRes
             .collect(),
         min_levenshtein_distance: min_distance,
         recommendation,
+    })
+}
+
+fn blocked_result(source: &str, recommendation: &str) -> TyposquatResult {
+    with_stale_note(TyposquatResult {
+        is_suspicious: true,
+        is_blocklisted: true,
+        blocklist_source: Some(source.to_string()),
+        similar_to: vec![],
+        min_levenshtein_distance: None,
+        recommendation: recommendation.to_string(),
+    })
+}
+
+/// Append feed-cache staleness guidance without changing block status.
+fn with_stale_note(mut result: TyposquatResult) -> TyposquatResult {
+    if feed_cache_is_stale() {
+        if let Some(note) = feed_cache::stale_warning() {
+            if !result.recommendation.contains("update-db") {
+                result.recommendation = format!("{}. {note}", result.recommendation);
+            }
+        }
     }
+    result
 }
 
 /// Normalize a package name for comparison.

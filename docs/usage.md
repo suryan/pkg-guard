@@ -21,18 +21,21 @@ pkg-guard --version
 pkg-guard --help
 ```
 
-## Custom blocklists (fast response to new threats)
+## Blocklist layers
 
-Built-in and internet lists can lag. Operators can maintain a **custom** list
-that is checked **before** the embedded seed.
+Lookup order (first match wins):
 
-### Locations (merged if several exist)
+1. **Custom** — operator-maintained (zero-day, no rebuild)  
+2. **Feed cache** — from `pkg-guard update-db` (`~/.cache/pkg-guard/blocklist-cache.json`)  
+3. **Seed** — embedded from `data/blocklist/seed.json` (offline default)
+
+### Custom lists (fast response to new threats)
+
+Locations (merged if several exist):
 
 1. `PKG_GUARD_BLOCKLIST` — absolute path via environment variable  
 2. `~/.config/pkg-guard/blocklist.json` (or `$XDG_CONFIG_HOME/pkg-guard/blocklist.json`)  
 3. `.pkg-guard/blocklist.json` in the current working directory (project-local)
-
-### Scaffold and use
 
 ```bash
 pkg-guard blocklist init
@@ -40,7 +43,7 @@ pkg-guard blocklist init
 pkg-guard blocklist reload
 pkg-guard blocklist status
 pkg-guard check -e python -p that-new-malicious-name
-# → BLOCKED — package is on your custom blocklist
+# → blocklist_source: "custom"
 ```
 
 Example file:
@@ -54,9 +57,23 @@ Example file:
 }
 ```
 
-Long-lived `pkg-guard serve` (MCP) **auto-reloads** when a custom blocklist
-file's mtime changes, so you can edit the JSON and the next check picks it up
-without restarting.
+Long-lived `pkg-guard serve` (MCP) **auto-reloads** custom files on mtime change.
+
+### Feed cache (`update-db`)
+
+```bash
+# Seed-only refresh (always works offline)
+pkg-guard update-db
+
+# Merge remote feeds (JSON in the same schema as custom/seed)
+pkg-guard update-db --feed https://example.com/team-blocklist.json
+# or: export PKG_GUARD_FEED_URLS=https://a.json,https://b.json
+
+pkg-guard blocklist status   # shows cache path, age, stale flag
+```
+
+If the cache is missing or older than **7 days**, `check` / audit recommendations
+include a reminder to run `update-db`.
 
 ## CLI Usage
 

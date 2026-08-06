@@ -1,7 +1,10 @@
-//! Shared data types and embedded blocklist
+//! Shared data types and blocklist stack (custom → feed → seed)
 
 pub mod blocklist;
+pub mod blocklist_format;
 pub mod custom_blocklist;
+pub mod feed_cache;
+pub mod update_db;
 
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};

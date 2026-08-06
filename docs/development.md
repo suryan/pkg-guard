@@ -45,7 +45,11 @@ pkg-guard/
 │   │   └── mod.rs       # Container orchestrator
 │   └── data/
 │       ├── mod.rs       # Shared types
-│       └── blocklist.rs # Embedded blocklists
+│       ├── blocklist.rs          # Lookup order + seed load
+│       ├── blocklist_format.rs   # Shared JSON schema
+│       ├── custom_blocklist.rs   # User/project custom lists
+│       ├── feed_cache.rs         # update-db cache
+│       └── update_db.rs          # Remote feed refresh
 ├── docs/                # Documentation
 └── target/              # Build output (gitignored)
 ```
@@ -148,35 +152,51 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | cargo run --
 
 5. **Add tests**
 
-## Adding Packages to the Blocklist
+## Blocklist data (seed vs custom vs feeds)
 
-Edit `src/data/blocklist.rs` and add entries to the appropriate `LazyLock<HashSet>`:
+### Seed (compiled into the binary)
 
-```rust
-static PYTHON_BLOCKLIST: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        // ... existing entries ...
-        "new-malicious-package",  // Add here
-    ]
-    .into_iter()
-    .collect()
-});
+Edit the JSON under `data/blocklist/` (not Rust source):
+
+```bash
+# Malicious / known-bad names
+data/blocklist/seed.json
+
+# Popular packages for typosquat similarity
+data/blocklist/popular.json
 ```
 
-The blocklist is compiled into the binary — rebuild after changes.
+Format (same as custom/feed documents):
 
-## Adding Popular Packages (for Typosquat Detection)
-
-Edit `src/data/blocklist.rs` and add to `POPULAR_*` vectors:
-
-```rust
-pub static POPULAR_PYTHON: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
-    vec![
-        // ... existing ...
-        "new-popular-package",
-    ]
-});
+```json
+{
+  "version": 1,
+  "python": ["new-malicious-package"],
+  "npm": [],
+  "java": []
+}
 ```
+
+Then rebuild: `cargo build --release` (seed is embedded via `include_str!`).
+
+### Custom lists (no rebuild — brand-new threats)
+
+```bash
+pkg-guard blocklist init
+# edit ~/.config/pkg-guard/blocklist.json
+pkg-guard blocklist reload   # optional; mtime auto-reload for MCP
+```
+
+### Feed cache (`update-db`)
+
+```bash
+pkg-guard update-db
+pkg-guard update-db --feed https://example.com/blocklist.json
+# or: PKG_GUARD_FEED_URLS=url1,url2 pkg-guard update-db
+```
+
+Writes `~/.cache/pkg-guard/blocklist-cache.json` (override with `PKG_GUARD_CACHE_DIR`).
+Lookup order: **custom → feed cache → seed**.
 
 ## Environment Variables
 
@@ -184,6 +204,10 @@ pub static POPULAR_PYTHON: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
 |----------|---------|
 | `RUST_LOG` | Tracing filter (e.g., `debug`, `pkg_guard=trace`) |
 | `DOCKER_HOST` | Docker daemon address (defaults to local socket) |
+| `PKG_GUARD_BLOCKLIST` | Path to an extra custom blocklist JSON file |
+| `PKG_GUARD_FEED_URLS` | Comma-separated remote feed URLs for `update-db` |
+| `PKG_GUARD_CACHE_DIR` | Override feed cache directory (default `~/.cache/pkg-guard`) |
+| `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` | Standard XDG roots for config/cache |
 
 ## CI/CD Integration
 
@@ -218,7 +242,7 @@ cross build --release --target aarch64-apple-darwin
 | Rust over Python | Single binary, no runtime deps, memory safety for security tooling |
 | bollard over docker CLI | No subprocess shelling, better error handling, typed API |
 | reqwest + rustls | No OpenSSL dependency, simpler cross-compilation |
-| Embedded blocklists | Zero runtime file dependencies, atomic updates via rebuild |
+| Seed JSON embedded at build | Offline default; intel updates via custom + feed cache without rebuild |
 | LazyLock over once_cell | Standard library (Rust 1.80+), no extra dependency |
 | Simple XML parsing | Avoids xml crate dependency for pom.xml, keeps binary small |
 | strsim crate | Battle-tested string similarity algorithms |

@@ -36,10 +36,10 @@ Both interfaces share the same core modules. The binary compiles to ~8-12MB with
 │  ┌──────────────┐  ┌────────────────────────────────────┐  │
 │  │    audit     │  │              data                   │  │
 │  │    ─────     │  │              ────                   │  │
-│  │  Docker API  │  │  Embedded blocklists (LazyLock)     │  │
-│  │  (bollard)   │  │  Popular packages database          │  │
-│  │  Container   │  │  Shared types (Ecosystem, Results)  │  │
-│  │  orchestrate │  │                                     │  │
+│  │  Docker API  │  │  Blocklist stack                    │  │
+│  │  (bollard)   │  │  custom → feed cache → seed JSON    │  │
+│  │  Container   │  │  Popular packages (data JSON)       │  │
+│  │  orchestrate │  │  Shared types (Ecosystem, Results)  │  │
 │  └──────────────┘  └────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -112,12 +112,20 @@ Container security posture:
 - PID limit prevents fork bombs
 - Memory limit prevents resource exhaustion
 
-### `src/data/` — Shared State
+### `src/data/` — Shared State & Blocklist Stack
 
-- **blocklist.rs** — Compile-time embedded HashSets (LazyLock) for each ecosystem
-- **mod.rs** — All shared types: Ecosystem enum, AuditResult, TyposquatResult, PinResult, ScanResult, etc.
+| Module | Role |
+|--------|------|
+| `blocklist.rs` | Lookup order + seed load (`include_str!` of `data/blocklist/seed.json`) |
+| `blocklist_format.rs` | Shared JSON document shape for seed / feeds / custom |
+| `custom_blocklist.rs` | User/project/env custom lists (highest priority) |
+| `feed_cache.rs` | Runtime cache from `update-db` (`~/.cache/pkg-guard/`) |
+| `update_db.rs` | Fetch remote feeds, merge with seed, write cache |
+| `mod.rs` | Shared types: Ecosystem, AuditResult, TyposquatResult, … |
 
-Blocklists are embedded in the binary — no external files needed at runtime.
+**Lookup order:** custom → feed cache → built-in seed.
+
+Seed data lives under `data/blocklist/` in the repo and is **embedded at compile time** so the binary still works offline. Feeds and custom lists are **not** in source; they update without a rebuild.
 
 ## Data Flow
 

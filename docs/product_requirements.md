@@ -45,11 +45,13 @@ These attacks succeed because there is no automated gate between "developer type
 
 | ID | Requirement |
 |----|-------------|
-| FR-2.1 | Maintain an embedded blocklist of known malicious packages |
+| FR-2.1 | Maintain an embedded **seed** blocklist (data files under `data/blocklist/`) |
 | FR-2.2 | Check packages against blocklist before any installation |
-| FR-2.3 | Blocklist must be updatable via source code change and rebuild |
+| FR-2.3 | Support layered updates: seed (rebuild), feed cache (`update-db`), custom (user file) |
 | FR-2.4 | Cover all three ecosystems (Python, npm, Java) |
-| FR-2.5 | Include known hijacked package versions (event-stream, ua-parser-js, log4j) |
+| FR-2.5 | Include known hijacked package names in the seed (e.g. crossenv, flatmap-stream) |
+| FR-2.6 | Custom lists checked before feed and seed for zero-day response |
+| FR-2.7 | Feed cache staleness warning when missing or older than 7 days |
 
 ### FR-3: Container Auditing
 
@@ -121,7 +123,8 @@ These attacks succeed because there is no automated gate between "developer type
 ## Out of Scope (v1)
 
 - Real-time package registry monitoring / webhook integration
-- Automatic blocklist updates from external feeds (requires rebuild)
+- Bundled default remote malware feed (operators supply `PKG_GUARD_FEED_URLS` / `--feed`)
+- OSV/CVE version-range advisory matching (name blocklists only for now)
 - Dependency confusion detection (requires private registry knowledge)
 - SBOM generation (Software Bill of Materials)
 - Integration with Snyk/Dependabot/Renovate

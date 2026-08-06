@@ -52,10 +52,10 @@ pub async fn audit_package(
             .blocklist_source
             .as_deref()
             .unwrap_or("builtin");
-        let warning = if source == "custom" {
-            "Package is on your custom blocklist (user/project/env)".to_string()
-        } else {
-            "Package is on the built-in malicious blocklist".to_string()
+        let warning = match source {
+            "custom" => "Package is on your custom blocklist (user/project/env)".to_string(),
+            "feed" => "Package is on the feed cache blocklist (pkg-guard update-db)".to_string(),
+            _ => "Package is on the built-in seed blocklist".to_string(),
         };
         return Ok(AuditResult {
             status: AuditStatus::Blocked,

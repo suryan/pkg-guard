@@ -1,302 +1,70 @@
-//! Embedded blocklist of known malicious packages
-//! Compiled into the binary — no external file needed at runtime.
+//! Seed blocklist and lookup across custom → feed cache → built-in seed.
+//!
+//! Seed data lives in `data/blocklist/seed.json` and is embedded at compile time
+//! via `include_str!` (Phase 1). Runtime feed cache is under
+//! `~/.cache/pkg-guard/` (Phase 2). User custom lists always win.
 
-use std::collections::HashSet;
 use std::sync::LazyLock;
 
+use super::blocklist_format::{parse_document, EcosystemSets};
 use super::Ecosystem;
 
-/// Known malicious Python packages
-static PYTHON_BLOCKLIST: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "reqeusts",
-        "requsets",
-        "request",
-        "python-requests",
-        "python3-dateutil",
-        "jeIlyfish",
-        "jellyfish-py",
-        "python-sqlite",
-        "colourfool",
-        "beautifulsoup",
-        "beutifulsoup4",
-        "bs4",
-        "nmap-python",
-        "python-nmap-scan",
-        "openvc-python",
-        "open-cv-python",
-        "opencv",
-        "tensorfow",
-        "tenserflow",
-        "tensorflw",
-        "pytorch-utils",
-        "torchvision-utils",
-        "scikit-learn-utils",
-        "pylint-utils",
-        "flassk",
-        "flaask",
-        "djang0",
-        "dajngo",
-        "numpyy",
-        "panadas",
-        "pandass",
-        "matplotlibb",
-        "pilliow",
-        "pyyaml-lib",
-        "cryptograpy",
-        "cryptographyy",
-        "urlib3",
-        "urllib33",
-        "coloramma",
-        "colrama",
-        "boto33",
-        "botocore2",
-        "setuptoolss",
-        "pipinstall",
-        "pip-install",
-        "pipsecurity",
-        "importlib-metdata",
-        "pydanticc",
-        "fastaapi",
-        "uvicornx",
-        "sqlalchemyy",
-        "celeryx",
-        "reddis",
-        "psycopg22",
-        "seleniium",
-        "pytestt",
-        "clickk",
-        "ctx",
-        "atomicwrites2",
-        "colourama",
-    ]
-    .into_iter()
-    .collect()
-});
+/// Embedded seed blocklist JSON (Phase 1 data file).
+const SEED_JSON: &str = include_str!("../../data/blocklist/seed.json");
 
-/// Known malicious npm packages
-static NPM_BLOCKLIST: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "expres",
-        "expresss",
-        "exprss",
-        "reactt",
-        "react-domm",
-        "lodasch",
-        "lodahs",
-        "1odash",
-        "lodash-js",
-        "lodash-utils",
-        "axois",
-        "axioss",
-        "chalks",
-        "chaIk",
-        "chalkk",
-        "comander",
-        "commanderr",
-        "debugg",
-        "dotenvv",
-        "dot-env",
-        "eslintt",
-        "jestt",
-        "jset",
-        "mochaa",
-        "momentjs",
-        "moment-js",
-        "mongooose",
-        "mongose",
-        "mysqll",
-        "nextjs",
-        "next-js",
-        "nodemoon",
-        "nodmon",
-        "passsport",
-        "pgg",
-        "pretier",
-        "prettieer",
-        "typescriptt",
-        "typescrpt",
-        "uuidd",
-        "webpackk",
-        "web-pack",
-        "yargss",
-        "flatmap-stream",
-        "crossenv",
-        "cross-env.js",
-        "crossenv2",
-        "babelcli",
-        "babel-cIi",
-        "jquerry",
-        "socket-io",
-        "bcryptt",
-        "jsonwebtokenn",
-        "json-web-token",
-        "multerr",
-        "sharpp",
-        "pupeteer",
-        "puppetter",
-        "cheerioo",
-        "dayjss",
-        "inquirerr",
-        "globb",
-        "rimraaff",
-        "semverr",
-        "minimistt",
-        "node-fetchh",
-        "form-dataa",
-        "mimee",
-        "asyncc",
-        "underscoree",
-    ]
-    .into_iter()
-    .collect()
-});
+/// Popular packages JSON for typosquat detection.
+const POPULAR_JSON: &str = include_str!("../../data/blocklist/popular.json");
 
-/// Known malicious/vulnerable Java packages (groupId:artifactId or just name)
-static JAVA_BLOCKLIST: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "io.github.nichetoolkit:mybatis-toolkit",
-        "io.github.nichetoolkit:jts-toolkit",
-        "bytecode-viewer",
-        "org.webjars.npm:malicious-package-example",
-    ]
-    .into_iter()
-    .collect()
-});
+static SEED_SETS: LazyLock<EcosystemSets> = LazyLock::new(load_seed_sets);
 
-/// Popular packages per ecosystem (for typosquat detection)
-pub static POPULAR_PYTHON: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
-    vec![
-        "requests",
-        "flask",
-        "django",
-        "numpy",
-        "pandas",
-        "scipy",
-        "matplotlib",
-        "beautifulsoup4",
-        "selenium",
-        "pillow",
-        "pytest",
-        "setuptools",
-        "pip",
-        "wheel",
-        "boto3",
-        "botocore",
-        "urllib3",
-        "certifi",
-        "charset-normalizer",
-        "idna",
-        "typing-extensions",
-        "pyyaml",
-        "cryptography",
-        "jinja2",
-        "markupsafe",
-        "click",
-        "pygments",
-        "colorama",
-        "python-dateutil",
-        "pytz",
-        "six",
-        "packaging",
-        "attrs",
-        "pluggy",
-        "more-itertools",
-        "zipp",
-        "importlib-metadata",
-        "tomli",
-        "pydantic",
-        "fastapi",
-        "uvicorn",
-        "sqlalchemy",
-        "alembic",
-        "celery",
-        "redis",
-        "psycopg2",
-        "opencv-python",
-        "tensorflow",
-        "torch",
-        "transformers",
-        "scikit-learn",
-    ]
-});
+static POPULAR_PYTHON: LazyLock<Vec<String>> = LazyLock::new(|| load_popular("python"));
+static POPULAR_NPM: LazyLock<Vec<String>> = LazyLock::new(|| load_popular("npm"));
+static POPULAR_JAVA: LazyLock<Vec<String>> = LazyLock::new(|| load_popular("java"));
 
-pub static POPULAR_NPM: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
-    vec![
-        "express",
-        "react",
-        "react-dom",
-        "lodash",
-        "axios",
-        "chalk",
-        "commander",
-        "debug",
-        "dotenv",
-        "eslint",
-        "jest",
-        "mocha",
-        "moment",
-        "mongoose",
-        "mysql",
-        "next",
-        "nodemon",
-        "passport",
-        "pg",
-        "prettier",
-        "socket.io",
-        "typescript",
-        "uuid",
-        "webpack",
-        "yargs",
-        "body-parser",
-        "cors",
-        "cookie-parser",
-        "jsonwebtoken",
-        "bcrypt",
-        "multer",
-        "sharp",
-        "puppeteer",
-        "cheerio",
-        "dayjs",
-        "inquirer",
-        "ora",
-        "glob",
-        "rimraf",
-        "mkdirp",
-        "semver",
-        "minimist",
-        "yallist",
-        "lru-cache",
-        "nan",
-        "node-fetch",
-        "form-data",
-        "mime",
-        "qs",
-        "async",
-        "underscore",
-    ]
-});
+/// Seed JSON is generated from repo data files; invalid content is a build bug.
+fn load_seed_sets() -> EcosystemSets {
+    match parse_document(SEED_JSON) {
+        Ok(doc) => doc.to_sets(),
+        Err(e) => {
+            tracing::error!("BUG: embedded seed.json is invalid: {e}");
+            EcosystemSets::default()
+        }
+    }
+}
 
-pub static POPULAR_JAVA: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
-    vec![
-        "org.springframework:spring-core",
-        "org.springframework.boot:spring-boot",
-        "com.google.guava:guava",
-        "org.apache.commons:commons-lang3",
-        "org.slf4j:slf4j-api",
-        "ch.qos.logback:logback-classic",
-        "com.fasterxml.jackson.core:jackson-databind",
-        "junit:junit",
-        "org.mockito:mockito-core",
-        "org.apache.httpcomponents:httpclient",
-        "com.google.code.gson:gson",
-        "org.projectlombok:lombok",
-        "org.apache.logging.log4j:log4j-core",
-        "io.netty:netty-all",
-        "com.squareup.okhttp3:okhttp",
-        "org.hibernate:hibernate-core",
-    ]
-});
+fn load_popular(ecosystem: &str) -> Vec<String> {
+    let Ok(doc) = parse_document(POPULAR_JSON) else {
+        tracing::error!("BUG: embedded popular.json is invalid");
+        return vec![];
+    };
+    match ecosystem {
+        "python" => doc.python,
+        "npm" => doc.npm,
+        "java" => doc.java,
+        _ => vec![],
+    }
+}
+
+/// Built-in seed as a document (for update-db merge / diagnostics).
+#[must_use]
+pub fn seed_document() -> super::blocklist_format::BlocklistDocument {
+    let mut doc = parse_document(SEED_JSON).unwrap_or_default();
+    if !doc.sources.iter().any(|s| s == "seed") {
+        doc.sources.push("seed".to_string());
+    }
+    doc.normalize();
+    doc
+}
+
+/// Entry counts for the compiled seed.
+#[must_use]
+pub fn seed_entry_counts() -> (usize, usize, usize) {
+    (
+        SEED_SETS.python.len(),
+        SEED_SETS.npm.len(),
+        SEED_SETS.java.len(),
+    )
+}
 
 /// Where a blocklist hit came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -305,11 +73,13 @@ pub enum BlocklistSource {
     None,
     /// User / project / env custom list (fast path for brand-new threats)
     Custom,
-    /// Compiled-in seed list
+    /// Cached remote feed (`pkg-guard update-db`)
+    Feed,
+    /// Compiled-in seed list (`data/blocklist/seed.json`)
     Builtin,
 }
 
-/// Check if a package is on the blocklist (custom lists first, then built-in seed).
+/// Check if a package is on any blocklist.
 #[must_use]
 pub fn is_blocklisted(ecosystem: Ecosystem, package_name: &str) -> bool {
     !matches!(
@@ -320,31 +90,70 @@ pub fn is_blocklisted(ecosystem: Ecosystem, package_name: &str) -> bool {
 
 /// Report which list matched, if any.
 ///
-/// Custom user/project lists are checked **before** the embedded seed so that
-/// brand-new threats can be blocked without waiting for feeds or a release.
+/// Order: **custom** → **feed cache** → **built-in seed**.
 #[must_use]
 pub fn blocklist_source(ecosystem: Ecosystem, package_name: &str) -> BlocklistSource {
     if super::custom_blocklist::is_custom_blocklisted(ecosystem, package_name) {
         return BlocklistSource::Custom;
     }
-    let name_lower = package_name.to_lowercase();
-    let builtin = match ecosystem {
-        Ecosystem::Python => PYTHON_BLOCKLIST.contains(name_lower.as_str()),
-        Ecosystem::Npm => NPM_BLOCKLIST.contains(name_lower.as_str()),
-        Ecosystem::Java => JAVA_BLOCKLIST.contains(name_lower.as_str()),
-    };
-    if builtin {
-        BlocklistSource::Builtin
-    } else {
-        BlocklistSource::None
+    if super::feed_cache::is_feed_blocklisted(ecosystem, package_name) {
+        return BlocklistSource::Feed;
+    }
+    if SEED_SETS.contains(ecosystem, package_name) {
+        return BlocklistSource::Builtin;
+    }
+    BlocklistSource::None
+}
+
+/// True when feed cache is missing or older than the configured max age.
+#[must_use]
+pub fn feed_cache_is_stale() -> bool {
+    super::feed_cache::is_stale()
+}
+
+/// Popular packages for typosquat detection.
+#[must_use]
+pub fn popular_packages(ecosystem: Ecosystem) -> &'static [String] {
+    match ecosystem {
+        Ecosystem::Python => POPULAR_PYTHON.as_slice(),
+        Ecosystem::Npm => POPULAR_NPM.as_slice(),
+        Ecosystem::Java => POPULAR_JAVA.as_slice(),
     }
 }
 
-/// Get the popular packages list for an ecosystem
-pub fn popular_packages(ecosystem: Ecosystem) -> &'static [&'static str] {
-    match ecosystem {
-        Ecosystem::Python => &POPULAR_PYTHON,
-        Ecosystem::Npm => &POPULAR_NPM,
-        Ecosystem::Java => &POPULAR_JAVA,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_seed_loads_and_blocks_known() {
+        assert!(is_blocklisted(Ecosystem::Python, "reqeusts"));
+        assert!(is_blocklisted(Ecosystem::Npm, "lodahs"));
+        assert!(!is_blocklisted(Ecosystem::Python, "requests"));
+    }
+
+    #[test]
+    fn test_seed_source_is_builtin_without_custom() {
+        // Assuming no custom entry for crossenv
+        let src = blocklist_source(Ecosystem::Npm, "crossenv");
+        assert!(matches!(
+            src,
+            BlocklistSource::Builtin | BlocklistSource::Feed
+        ));
+    }
+
+    #[test]
+    fn test_popular_python_contains_requests() {
+        assert!(popular_packages(Ecosystem::Python)
+            .iter()
+            .any(|p| p == "requests"));
+    }
+
+    #[test]
+    fn test_seed_document_counts() {
+        let (py, npm, java) = seed_entry_counts();
+        assert!(py >= 50);
+        assert!(npm >= 50);
+        assert!(java >= 1);
     }
 }

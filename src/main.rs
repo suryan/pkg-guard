@@ -73,6 +73,13 @@ enum Commands {
         #[command(subcommand)]
         action: BlocklistCmd,
     },
+    /// Refresh feed cache from remote feeds + built-in seed
+    UpdateDb {
+        /// Extra feed URL(s) in blocklist JSON format (repeatable).
+        /// Also reads comma-separated `PKG_GUARD_FEED_URLS`.
+        #[arg(long = "feed")]
+        feeds: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -130,63 +137,94 @@ async fn main() -> anyhow::Result<()> {
             let result = project::audit_project(&path)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
-        Commands::Blocklist { action } => match action {
-            BlocklistCmd::Status => {
-                let snap = data::custom_blocklist::snapshot();
-                let candidates = data::custom_blocklist::candidate_paths();
-                let status = serde_json::json!({
-                    "candidate_paths": candidates,
-                    "loaded_paths": snap.loaded_paths,
-                    "total_custom_entries": snap.total_entries(),
-                    "load_errors": snap.errors,
-                    "hint": "Edit a custom JSON blocklist, then run: pkg-guard blocklist reload",
-                });
-                println!("{}", serde_json::to_string_pretty(&status)?);
-            }
-            BlocklistCmd::Reload => {
-                data::custom_blocklist::reload();
-                let snap = data::custom_blocklist::snapshot();
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "reloaded": true,
-                        "loaded_paths": snap.loaded_paths,
-                        "total_custom_entries": snap.total_entries(),
-                        "load_errors": snap.errors,
-                    }))?
-                );
-            }
-            BlocklistCmd::Init { path } => {
-                let dest = if let Some(p) = path {
-                    std::path::PathBuf::from(p)
-                } else if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-                    std::path::PathBuf::from(xdg).join("pkg-guard/blocklist.json")
-                } else {
-                    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                    std::path::PathBuf::from(home).join(".config/pkg-guard/blocklist.json")
-                };
-                if dest.exists() {
-                    anyhow::bail!(
-                        "Refusing to overwrite existing file: {}. Pass a different --path.",
-                        dest.display()
-                    );
-                }
-                data::custom_blocklist::write_example(&dest)?;
-                data::custom_blocklist::reload();
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "written": dest,
-                        "next_steps": [
-                            "Edit the file and add package names under python/npm/java",
-                            "Run: pkg-guard blocklist reload  (or restart MCP serve)",
-                            "Verify: pkg-guard check -e python -p <name>"
-                        ],
-                    }))?
-                );
-            }
-        },
+        Commands::Blocklist { action } => run_blocklist_cmd(action)?,
+        Commands::UpdateDb { feeds } => {
+            let result = data::update_db::update_db(&feeds).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
     }
 
     Ok(())
+}
+
+fn run_blocklist_cmd(action: BlocklistCmd) -> anyhow::Result<()> {
+    match action {
+        BlocklistCmd::Status => print_blocklist_status()?,
+        BlocklistCmd::Reload => {
+            data::custom_blocklist::reload();
+            data::feed_cache::reload();
+            let snap = data::custom_blocklist::snapshot();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "reloaded": true,
+                    "custom_loaded_paths": snap.loaded_paths,
+                    "custom_entries": snap.total_entries(),
+                    "feed_cache": data::feed_cache::status_snapshot(),
+                }))?
+            );
+        }
+        BlocklistCmd::Init { path } => {
+            let dest = default_custom_blocklist_path(path);
+            if dest.exists() {
+                anyhow::bail!(
+                    "Refusing to overwrite existing file: {}. Pass a different --path.",
+                    dest.display()
+                );
+            }
+            data::custom_blocklist::write_example(&dest)?;
+            data::custom_blocklist::reload();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "written": dest,
+                    "next_steps": [
+                        "Edit the file and add package names under python/npm/java",
+                        "Run: pkg-guard blocklist reload",
+                        "Verify: pkg-guard check -e python -p <name>"
+                    ],
+                }))?
+            );
+        }
+    }
+    Ok(())
+}
+
+fn print_blocklist_status() -> anyhow::Result<()> {
+    let snap = data::custom_blocklist::snapshot();
+    let (seed_py, seed_npm, seed_java) = data::blocklist::seed_entry_counts();
+    let status = serde_json::json!({
+        "lookup_order": ["custom", "feed_cache", "seed"],
+        "custom": {
+            "candidate_paths": data::custom_blocklist::candidate_paths(),
+            "loaded_paths": snap.loaded_paths,
+            "total_entries": snap.total_entries(),
+            "load_errors": snap.errors,
+        },
+        "feed_cache": data::feed_cache::status_snapshot(),
+        "seed": {
+            "source": "data/blocklist/seed.json (embedded)",
+            "python": seed_py,
+            "npm": seed_npm,
+            "java": seed_java,
+        },
+        "hints": [
+            "Brand-new threats: edit custom list (pkg-guard blocklist init)",
+            "Refresh intel: pkg-guard update-db [--feed URL]",
+            "Custom always wins over feed and seed",
+        ],
+    });
+    println!("{}", serde_json::to_string_pretty(&status)?);
+    Ok(())
+}
+
+fn default_custom_blocklist_path(path: Option<String>) -> std::path::PathBuf {
+    if let Some(p) = path {
+        return std::path::PathBuf::from(p);
+    }
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        return std::path::PathBuf::from(xdg).join("pkg-guard/blocklist.json");
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home).join(".config/pkg-guard/blocklist.json")
 }

@@ -42,19 +42,21 @@ pkg-guard project -p .
 
 # Custom blocklist (block brand-new threats without waiting for feeds)
 pkg-guard blocklist init              # scaffold ~/.config/pkg-guard/blocklist.json
-# edit the file, then:
-pkg-guard blocklist reload
 pkg-guard blocklist status
-pkg-guard check -e python -p brand-new-threat
+
+# Refresh feed cache (seed + optional remote feeds)
+pkg-guard update-db
+pkg-guard update-db --feed https://example.com/blocklist.json
 
 # Start as MCP server (for IDE integration)
 pkg-guard serve
 ```
 
-## Custom blocklists
+## Blocklist layers
 
-Internet feeds and the built-in seed can lag behind zero-day malware. Maintain
-your own list and pkg-guard will **always check it first**:
+**Order:** custom → feed cache (`update-db`) → seed (`data/blocklist/seed.json`)
+
+### Custom (zero-day, no rebuild)
 
 | Path | Scope |
 |------|--------|
@@ -62,16 +64,25 @@ your own list and pkg-guard will **always check it first**:
 | `~/.config/pkg-guard/blocklist.json` | User-wide |
 | `.pkg-guard/blocklist.json` | Project (CWD) |
 
-```json
-{
-  "version": 1,
-  "python": ["suspicious-new-pkg"],
-  "npm": [],
-  "java": []
-}
+```bash
+pkg-guard blocklist init
+# edit JSON, then:
+pkg-guard blocklist status
 ```
 
-After edits: `pkg-guard blocklist reload` (or restart `pkg-guard serve`).
+### Feed cache
+
+```bash
+pkg-guard update-db
+pkg-guard update-db --feed https://example.com/blocklist.json
+# PKG_GUARD_FEED_URLS=url1,url2
+```
+
+Cache: `~/.cache/pkg-guard/blocklist-cache.json` (override with `PKG_GUARD_CACHE_DIR`).
+
+### Seed (repo data, embedded at build)
+
+Edit `data/blocklist/seed.json` / `popular.json` and rebuild.
 
 ## MCP Integration
 
@@ -130,7 +141,8 @@ src/
 ├── parsers/         # Dependency file parsers
 ├── audit/           # Container audit orchestrator (bollard)
 ├── project/         # Whole-repo manifest + lockfile scanner
-└── data/            # Embedded blocklists & shared types
+└── data/            # Blocklist stack + shared types
+data/blocklist/      # seed.json + popular.json (Phase 1 data files)
 ```
 
 ## License
