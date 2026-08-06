@@ -298,13 +298,45 @@ pub static POPULAR_JAVA: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     ]
 });
 
-/// Check if a package is on the blocklist
+/// Where a blocklist hit came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlocklistSource {
+    /// Not on any blocklist
+    None,
+    /// User / project / env custom list (fast path for brand-new threats)
+    Custom,
+    /// Compiled-in seed list
+    Builtin,
+}
+
+/// Check if a package is on the blocklist (custom lists first, then built-in seed).
+#[must_use]
 pub fn is_blocklisted(ecosystem: Ecosystem, package_name: &str) -> bool {
+    !matches!(
+        blocklist_source(ecosystem, package_name),
+        BlocklistSource::None
+    )
+}
+
+/// Report which list matched, if any.
+///
+/// Custom user/project lists are checked **before** the embedded seed so that
+/// brand-new threats can be blocked without waiting for feeds or a release.
+#[must_use]
+pub fn blocklist_source(ecosystem: Ecosystem, package_name: &str) -> BlocklistSource {
+    if super::custom_blocklist::is_custom_blocklisted(ecosystem, package_name) {
+        return BlocklistSource::Custom;
+    }
     let name_lower = package_name.to_lowercase();
-    match ecosystem {
+    let builtin = match ecosystem {
         Ecosystem::Python => PYTHON_BLOCKLIST.contains(name_lower.as_str()),
         Ecosystem::Npm => NPM_BLOCKLIST.contains(name_lower.as_str()),
         Ecosystem::Java => JAVA_BLOCKLIST.contains(name_lower.as_str()),
+    };
+    if builtin {
+        BlocklistSource::Builtin
+    } else {
+        BlocklistSource::None
     }
 }
 

@@ -48,12 +48,21 @@ pub async fn audit_package(
     let typosquat_result = typosquat::check_typosquat(ecosystem, package_name);
 
     if typosquat_result.is_blocklisted {
+        let source = typosquat_result
+            .blocklist_source
+            .as_deref()
+            .unwrap_or("builtin");
+        let warning = if source == "custom" {
+            "Package is on your custom blocklist (user/project/env)".to_string()
+        } else {
+            "Package is on the built-in malicious blocklist".to_string()
+        };
         return Ok(AuditResult {
             status: AuditStatus::Blocked,
             package: package_name.to_string(),
             version: version.to_string(),
             ecosystem,
-            warnings: vec!["Package is on the known-malicious blocklist".to_string()],
+            warnings: vec![warning],
             typosquat_check: typosquat_result,
             metadata: None,
             container_audit: None,
@@ -762,6 +771,7 @@ Downloading files...
         let typosquat = crate::data::TyposquatResult {
             is_suspicious: false,
             is_blocklisted: false,
+            blocklist_source: None,
             similar_to: vec![],
             min_levenshtein_distance: Some(0),
             recommendation: "ok".to_string(),
@@ -789,6 +799,7 @@ Downloading files...
         let typosquat = crate::data::TyposquatResult {
             is_suspicious: false,
             is_blocklisted: false,
+            blocklist_source: None,
             similar_to: vec![],
             min_levenshtein_distance: Some(0),
             recommendation: "ok".to_string(),
@@ -815,6 +826,7 @@ Downloading files...
         let typosquat = crate::data::TyposquatResult {
             is_suspicious: false,
             is_blocklisted: false,
+            blocklist_source: None,
             similar_to: vec![],
             min_levenshtein_distance: Some(0),
             recommendation: "ok".to_string(),

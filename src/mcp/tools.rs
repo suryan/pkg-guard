@@ -118,7 +118,9 @@ fn scan_lockfile_tool() -> ToolDefinition {
     ToolDefinition {
         name: "scan_lockfile".to_string(),
         description: "Scan a lock file for known malicious or compromised package versions. \
-            Checks against the built-in blocklist database."
+            Checks against the built-in seed blocklist plus any custom user/project \
+            blocklist (PKG_GUARD_BLOCKLIST, ~/.config/pkg-guard/blocklist.json, \
+            .pkg-guard/blocklist.json)."
             .to_string(),
         input_schema: json!({
             "type": "object",

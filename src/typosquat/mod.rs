@@ -9,7 +9,7 @@
 
 use strsim::{jaro_winkler, levenshtein};
 
-use crate::data::blocklist::{is_blocklisted, popular_packages};
+use crate::data::blocklist::{blocklist_source, popular_packages, BlocklistSource};
 use crate::data::{Ecosystem, TyposquatResult};
 
 /// Homoglyph pairs — characters that look similar in many fonts
@@ -32,15 +32,32 @@ const MAX_LEVENSHTEIN_DISTANCE: usize = 2;
 
 /// Check a package name for typosquatting against known popular packages.
 pub fn check_typosquat(ecosystem: Ecosystem, package_name: &str) -> TyposquatResult {
-    let blocklisted = is_blocklisted(ecosystem, package_name);
-    if blocklisted {
-        return TyposquatResult {
-            is_suspicious: true,
-            is_blocklisted: true,
-            similar_to: vec![],
-            min_levenshtein_distance: None,
-            recommendation: "BLOCKED — package is on the known-malicious blocklist".to_string(),
-        };
+    match blocklist_source(ecosystem, package_name) {
+        BlocklistSource::Custom => {
+            return TyposquatResult {
+                is_suspicious: true,
+                is_blocklisted: true,
+                blocklist_source: Some("custom".to_string()),
+                similar_to: vec![],
+                min_levenshtein_distance: None,
+                recommendation: "BLOCKED — package is on your custom blocklist \
+                     (user/project/env). Remove it from the custom list only if \
+                     you intended to allow it."
+                    .to_string(),
+            };
+        }
+        BlocklistSource::Builtin => {
+            return TyposquatResult {
+                is_suspicious: true,
+                is_blocklisted: true,
+                blocklist_source: Some("builtin".to_string()),
+                similar_to: vec![],
+                min_levenshtein_distance: None,
+                recommendation: "BLOCKED — package is on the built-in malicious blocklist"
+                    .to_string(),
+            };
+        }
+        BlocklistSource::None => {}
     }
 
     let popular = popular_packages(ecosystem);
@@ -56,6 +73,7 @@ pub fn check_typosquat(ecosystem: Ecosystem, package_name: &str) -> TyposquatRes
             return TyposquatResult {
                 is_suspicious: false,
                 is_blocklisted: false,
+                blocklist_source: None,
                 similar_to: vec![],
                 min_levenshtein_distance: Some(0),
                 recommendation: "OK — this is a known legitimate package".to_string(),
@@ -95,6 +113,7 @@ pub fn check_typosquat(ecosystem: Ecosystem, package_name: &str) -> TyposquatRes
     TyposquatResult {
         is_suspicious,
         is_blocklisted: false,
+        blocklist_source: None,
         similar_to: similar_packages
             .iter()
             .map(|(name, _, _)| name.clone())

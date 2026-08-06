@@ -1,6 +1,7 @@
 //! Shared data types and embedded blocklist
 
 pub mod blocklist;
+pub mod custom_blocklist;
 
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
@@ -90,6 +91,9 @@ pub struct TyposquatResult {
     pub is_suspicious: bool,
     /// Whether the package is on the blocklist
     pub is_blocklisted: bool,
+    /// Which blocklist matched: `custom`, `builtin`, or omitted when not blocklisted
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocklist_source: Option<String>,
     /// Similar legitimate packages found
     pub similar_to: Vec<String>,
     /// Minimum edit distance to a popular package

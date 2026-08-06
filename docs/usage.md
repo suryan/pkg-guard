@@ -21,6 +21,43 @@ pkg-guard --version
 pkg-guard --help
 ```
 
+## Custom blocklists (fast response to new threats)
+
+Built-in and internet lists can lag. Operators can maintain a **custom** list
+that is checked **before** the embedded seed.
+
+### Locations (merged if several exist)
+
+1. `PKG_GUARD_BLOCKLIST` — absolute path via environment variable  
+2. `~/.config/pkg-guard/blocklist.json` (or `$XDG_CONFIG_HOME/pkg-guard/blocklist.json`)  
+3. `.pkg-guard/blocklist.json` in the current working directory (project-local)
+
+### Scaffold and use
+
+```bash
+pkg-guard blocklist init
+# Edit ~/.config/pkg-guard/blocklist.json — add names under python / npm / java
+pkg-guard blocklist reload
+pkg-guard blocklist status
+pkg-guard check -e python -p that-new-malicious-name
+# → BLOCKED — package is on your custom blocklist
+```
+
+Example file:
+
+```json
+{
+  "version": 1,
+  "python": ["that-new-malicious-name"],
+  "npm": ["evil-typosquat"],
+  "java": ["com.attacker:payload"]
+}
+```
+
+Long-lived `pkg-guard serve` (MCP) **auto-reloads** when a custom blocklist
+file's mtime changes, so you can edit the JSON and the next check picks it up
+without restarting.
+
 ## CLI Usage
 
 ### Check a Package for Typosquatting

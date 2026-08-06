@@ -40,9 +40,38 @@ pkg-guard scan -f package-lock.json
 pkg-guard project -p .
 # → WARNING/CRITICAL/CLEAN summary across the repo
 
+# Custom blocklist (block brand-new threats without waiting for feeds)
+pkg-guard blocklist init              # scaffold ~/.config/pkg-guard/blocklist.json
+# edit the file, then:
+pkg-guard blocklist reload
+pkg-guard blocklist status
+pkg-guard check -e python -p brand-new-threat
+
 # Start as MCP server (for IDE integration)
 pkg-guard serve
 ```
+
+## Custom blocklists
+
+Internet feeds and the built-in seed can lag behind zero-day malware. Maintain
+your own list and pkg-guard will **always check it first**:
+
+| Path | Scope |
+|------|--------|
+| `PKG_GUARD_BLOCKLIST` env | Explicit file path |
+| `~/.config/pkg-guard/blocklist.json` | User-wide |
+| `.pkg-guard/blocklist.json` | Project (CWD) |
+
+```json
+{
+  "version": 1,
+  "python": ["suspicious-new-pkg"],
+  "npm": [],
+  "java": []
+}
+```
+
+After edits: `pkg-guard blocklist reload` (or restart `pkg-guard serve`).
 
 ## MCP Integration
 
