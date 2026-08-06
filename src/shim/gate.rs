@@ -53,7 +53,7 @@ async fn check_packages(
         match super::transitive::expand_with_transitive(ecosystem, packages).await {
             Ok(deps) if deps.len() > packages.len() => {
                 eprintln!(
-                    "pkg-guard shim: expanded {} top-level package(s) → {} with transitive deps (depth≤3, max 80)",
+                    "pkg-guard shim: expanded {} top-level package(s) → {} with transitive deps",
                     packages.len(),
                     deps.len()
                 );

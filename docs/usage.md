@@ -181,11 +181,12 @@ in a dep you never typed.
 
 | Launcher | Gated |
 |----------|--------|
-| `uvx pkg==ver` / `uv tool run …` | Top-level + **transitive** runtime deps (bounded: depth≤3, max 80 packages); blocklist + OSV when version known |
+| `uvx pkg==ver` / `uv tool run …` | Top-level + **all** transitive runtime deps (via registry metadata); blocklist + OSV when version known |
 | `npx -y pkg@ver` / `pnpm dlx` / `yarn dlx` | Same (npm registry deps) |
 | `pip install` / `npm install` / `cargo add` | As before (install line packages / files) |
 
-Transitive resolve uses registry metadata (not a full solver). Disable with
+Transitive resolve walks the full runtime tree (cycle-safe). Not a full solver
+(optional extras / complex ranges may be incomplete). Disable with
 `PKG_GUARD_SHIM_TRANSITIVE=0`.
 
 **Residual gaps**

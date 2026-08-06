@@ -1,7 +1,7 @@
-//! Bounded transitive dependency resolution for shim gates (`uvx` / `npx`).
+//! Transitive dependency resolution for shim gates (`uvx` / `npx`).
 //!
-//! Resolves direct + nested runtime deps from registry metadata (not a full solver).
-//! Limits: max depth, max packages, network timeouts.
+//! Resolves nested runtime deps from registry metadata (not a full solver).
+//! No package-count or depth cap — cycles are prevented via a seen-set only.
 
 use std::collections::{HashSet, VecDeque};
 
@@ -11,9 +11,6 @@ use tracing::debug;
 
 use super::PackageRef;
 use crate::data::Ecosystem;
-
-const MAX_DEPTH: u32 = 3;
-const MAX_PACKAGES: usize = 80;
 
 /// Expand `roots` with transitive runtime dependencies (best-effort).
 pub async fn expand_with_transitive(
@@ -42,20 +39,17 @@ async fn expand_pypi(roots: &[PackageRef]) -> Result<Vec<PackageRef>> {
     let client = http_client()?;
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<PackageRef> = Vec::new();
-    let mut q: VecDeque<(PackageRef, u32)> = VecDeque::new();
+    let mut q: VecDeque<PackageRef> = VecDeque::new();
 
     for r in roots {
         let key = r.name.to_ascii_lowercase();
         if seen.insert(key) {
-            q.push_back((r.clone(), 0));
+            q.push_back(r.clone());
             out.push(r.clone());
         }
     }
 
-    while let Some((pkg, depth)) = q.pop_front() {
-        if depth >= MAX_DEPTH || out.len() >= MAX_PACKAGES {
-            break;
-        }
+    while let Some(pkg) = q.pop_front() {
         let version = match &pkg.version {
             Some(v) => v.clone(),
             None => match pypi_latest_version(&client, &pkg.name).await {
@@ -74,9 +68,6 @@ async fn expand_pypi(roots: &[PackageRef]) -> Result<Vec<PackageRef>> {
             }
         };
         for dep_name in deps {
-            if out.len() >= MAX_PACKAGES {
-                break;
-            }
             let key = dep_name.to_ascii_lowercase();
             if seen.insert(key) {
                 let child = PackageRef {
@@ -84,7 +75,7 @@ async fn expand_pypi(roots: &[PackageRef]) -> Result<Vec<PackageRef>> {
                     version: None, // version resolved lazily when we fetch its requires
                 };
                 out.push(child.clone());
-                q.push_back((child, depth + 1));
+                q.push_back(child);
             }
         }
     }
@@ -162,20 +153,17 @@ async fn expand_npm(roots: &[PackageRef]) -> Result<Vec<PackageRef>> {
     let client = http_client()?;
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<PackageRef> = Vec::new();
-    let mut q: VecDeque<(PackageRef, u32)> = VecDeque::new();
+    let mut q: VecDeque<PackageRef> = VecDeque::new();
 
     for r in roots {
         let key = r.name.clone();
         if seen.insert(key) {
-            q.push_back((r.clone(), 0));
+            q.push_back(r.clone());
             out.push(r.clone());
         }
     }
 
-    while let Some((pkg, depth)) = q.pop_front() {
-        if depth >= MAX_DEPTH || out.len() >= MAX_PACKAGES {
-            break;
-        }
+    while let Some(pkg) = q.pop_front() {
         let version = match &pkg.version {
             Some(v) => v.clone(),
             None => match npm_latest_version(&client, &pkg.name).await {
@@ -194,9 +182,6 @@ async fn expand_npm(roots: &[PackageRef]) -> Result<Vec<PackageRef>> {
             }
         };
         for (dep_name, dep_ver) in deps {
-            if out.len() >= MAX_PACKAGES {
-                break;
-            }
             if seen.insert(dep_name.clone()) {
                 // range strings like ^1.0.0 — keep as None for OSV (name-only blocklist still works)
                 let ver = if dep_ver.chars().next().is_some_and(|c| c.is_ascii_digit()) {
@@ -209,7 +194,7 @@ async fn expand_npm(roots: &[PackageRef]) -> Result<Vec<PackageRef>> {
                     version: ver,
                 };
                 out.push(child.clone());
-                q.push_back((child, depth + 1));
+                q.push_back(child);
             }
         }
     }
