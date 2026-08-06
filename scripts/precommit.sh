@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Always run from the repository root (works from scripts/, repo root, or any CWD).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "$ROOT"
+
 echo "=== Pre-commit checks ==="
+echo "  (cwd: $ROOT)"
 echo ""
 
 # Minimum line coverage % (override with PKG_GUARD_MIN_COVERAGE).
@@ -11,6 +17,10 @@ MIN_COVERAGE="${PKG_GUARD_MIN_COVERAGE:-90}"
 
 # 1. File line count check
 echo "[1/6] Checking file line counts..."
+if [ ! -d src ]; then
+  echo "  FAIL: src/ not found under $ROOT"
+  exit 1
+fi
 FAILED=0
 while IFS= read -r f; do
   lines=$(wc -l < "$f")
@@ -86,9 +96,13 @@ echo "  PASS"
 # 5. OSV vulnerability scan (external scanner if present)
 echo "[5/6] Security audit (osv-scanner)..."
 if command -v osv-scanner &> /dev/null; then
-  if ! osv-scanner scan --config=osv-scanner.toml . > /dev/null 2>&1; then
+  OSV_ARGS=(scan .)
+  if [ -f osv-scanner.toml ]; then
+    OSV_ARGS=(scan --config=osv-scanner.toml .)
+  fi
+  if ! osv-scanner "${OSV_ARGS[@]}" > /dev/null 2>&1; then
     echo "  WARN: Vulnerabilities detected (non-blocking)"
-    osv-scanner scan --config=osv-scanner.toml . 2>&1 | tail -10
+    osv-scanner "${OSV_ARGS[@]}" 2>&1 | tail -10 || true
   else
     echo "  PASS"
   fi
