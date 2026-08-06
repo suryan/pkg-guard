@@ -13,11 +13,11 @@
 //! Mitigations: resolve real binaries by skipping self; env overrides
 //! `PKG_GUARD_REAL_<TOOL>`; `PKG_GUARD_SHIM_MODE=off|warn|enforce` (default enforce).
 
-mod cargo;
-mod gate;
-mod npm;
-mod pip;
-mod resolve;
+pub(crate) mod cargo;
+pub(crate) mod gate;
+pub(crate) mod npm;
+pub(crate) mod pip;
+pub(crate) mod resolve;
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -244,5 +244,92 @@ mod tests {
     fn test_program_stem() {
         assert_eq!(program_stem("/usr/bin/pip3"), "pip3");
         assert_eq!(program_stem("cargo"), "cargo");
+    }
+
+    #[test]
+    fn test_shim_mode_from_env() {
+        std::env::set_var("PKG_GUARD_SHIM_MODE", "off");
+        assert_eq!(ShimMode::from_env(), ShimMode::Off);
+        std::env::set_var("PKG_GUARD_SHIM_MODE", "warn");
+        assert_eq!(ShimMode::from_env(), ShimMode::Warn);
+        std::env::set_var("PKG_GUARD_SHIM_MODE", "enforce");
+        assert_eq!(ShimMode::from_env(), ShimMode::Enforce);
+        std::env::set_var("PKG_GUARD_SHIM_MODE", "disabled");
+        assert_eq!(ShimMode::from_env(), ShimMode::Off);
+        std::env::set_var("PKG_GUARD_SHIM_MODE", "permissive");
+        assert_eq!(ShimMode::from_env(), ShimMode::Warn);
+        std::env::remove_var("PKG_GUARD_SHIM_MODE");
+        assert_eq!(ShimMode::from_env(), ShimMode::Enforce);
+    }
+
+    #[test]
+    fn test_install_and_status_shims() {
+        let dir = std::env::temp_dir().join(format!("pkg-guard-shims-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let created = install_shims(&dir, &["pip".into(), "npm".into()]).expect("install");
+        assert_eq!(created.len(), 2);
+        assert!(dir.join("pip").exists() || dir.join("pip").symlink_metadata().is_ok());
+        // reinstall over existing
+        let created2 = install_shims(&dir, &["pip".into()]).expect("reinstall");
+        assert_eq!(created2.len(), 1);
+        assert!(install_shims(&dir, &["not-a-tool".into()]).is_err());
+        let report = status_report(&["pip", "npm", "cargo"]);
+        assert_eq!(report["tools"].as_array().unwrap().len(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_run_off_mode_and_passthrough_plans() {
+        std::env::set_var("PKG_GUARD_SHIM_MODE", "off");
+        // Pass-through will try to exec real binary — use a missing override to get Result::Err
+        // rather than replacing the test process.
+        std::env::set_var("PKG_GUARD_REAL_PIP", "/nonexistent/pkg-guard-real-pip-xyz");
+        let err = run("pip", &["list".into()]).await;
+        assert!(err.is_err());
+        std::env::remove_var("PKG_GUARD_REAL_PIP");
+
+        // Unknown wrapper stem with enforce still pass-throughs
+        std::env::set_var("PKG_GUARD_SHIM_MODE", "enforce");
+        std::env::set_var("PKG_GUARD_REAL_MVN", "/nonexistent/mvn-xyz");
+        let err = run("mvn", &["--version".into()]).await;
+        assert!(err.is_err());
+        std::env::remove_var("PKG_GUARD_REAL_MVN");
+        std::env::remove_var("PKG_GUARD_SHIM_MODE");
+    }
+
+    #[tokio::test]
+    async fn test_run_gate_block_returns_2() {
+        let dir = std::env::temp_dir().join(format!("shim-run-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let bl = dir.join("bl.json");
+        std::fs::write(
+            &bl,
+            r#"{"python":["evil-shim-block"],"npm":[],"java":[],"cargo":[]}"#,
+        )
+        .unwrap();
+        std::env::set_var("PKG_GUARD_BLOCKLIST", &bl);
+        std::env::set_var("PKG_GUARD_CACHE_DIR", &dir);
+        std::env::set_var("PKG_GUARD_SHIM_MODE", "enforce");
+        crate::data::custom_blocklist::reload();
+        crate::data::feed_cache::reload();
+
+        let code = run("pip", &["install".into(), "evil-shim-block==1.0.0".into()])
+            .await
+            .unwrap();
+        assert_eq!(code, 2);
+
+        std::env::set_var("PKG_GUARD_SHIM_MODE", "warn");
+        // warn mode tries pass-through after warn
+        std::env::set_var("PKG_GUARD_REAL_PIP", "/nonexistent/pip-after-warn");
+        let err = run("pip", &["install".into(), "evil-shim-block==1.0.0".into()]).await;
+        assert!(err.is_err());
+
+        std::env::remove_var("PKG_GUARD_BLOCKLIST");
+        std::env::remove_var("PKG_GUARD_CACHE_DIR");
+        std::env::remove_var("PKG_GUARD_SHIM_MODE");
+        std::env::remove_var("PKG_GUARD_REAL_PIP");
+        crate::data::custom_blocklist::reload();
+        crate::data::feed_cache::reload();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

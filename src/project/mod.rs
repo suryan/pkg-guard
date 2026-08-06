@@ -283,6 +283,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_audit_project_finds_unpinned_and_malicious() {
         let dir = tempfile_dir("pkg-guard-project");
         let req = dir.join("requirements.txt");
@@ -290,25 +291,33 @@ mod tests {
         writeln!(f, "flask").expect("write");
         writeln!(f, "reqeusts==1.0.0").expect("write");
 
-        // Name blocklists are not embedded — load a custom list for this test.
         let bl = dir.join("custom-blocklist.json");
         fs::write(
             &bl,
             r#"{"python":["reqeusts"],"npm":[],"java":[],"cargo":[]}"#,
         )
         .expect("write blocklist");
-        // SAFETY: single-threaded test process for env var isolation
+        let cache = dir.join("cache");
+        fs::create_dir_all(&cache).unwrap();
         std::env::set_var("PKG_GUARD_BLOCKLIST", &bl);
+        std::env::set_var("PKG_GUARD_CACHE_DIR", &cache);
         crate::data::custom_blocklist::reload();
+        crate::data::feed_cache::reload();
 
         let result = audit_project(dir.to_str().expect("utf8")).expect("audit");
         assert!(result.files_scanned >= 1);
         assert!(result.total_unpinned >= 1);
-        assert!(result.total_malicious >= 1);
+        assert!(
+            result.total_malicious >= 1,
+            "expected malicious hit, got {:?}",
+            result.files
+        );
         assert_eq!(result.status, "CRITICAL");
 
         std::env::remove_var("PKG_GUARD_BLOCKLIST");
+        std::env::remove_var("PKG_GUARD_CACHE_DIR");
         crate::data::custom_blocklist::reload();
+        crate::data::feed_cache::reload();
         let _ = fs::remove_dir_all(&dir);
     }
 

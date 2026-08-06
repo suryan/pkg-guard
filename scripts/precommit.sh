@@ -4,8 +4,10 @@ set -euo pipefail
 echo "=== Pre-commit checks ==="
 echo ""
 
-# Minimum line coverage % (override with PKG_GUARD_MIN_COVERAGE)
-MIN_COVERAGE="${PKG_GUARD_MIN_COVERAGE:-35}"
+# Minimum line coverage % (override with PKG_GUARD_MIN_COVERAGE).
+# main.rs is the multicall/CLI entrypoint — covered by dogfood + manual use;
+# library modules under src/ are gated here.
+MIN_COVERAGE="${PKG_GUARD_MIN_COVERAGE:-90}"
 
 # 1. File line count check
 echo "[1/6] Checking file line counts..."
@@ -52,12 +54,14 @@ fi
 # Summary is printed; full HTML: cargo llvm-cov --html --output-dir target/llvm-cov
 COV_OUT=$(mktemp)
 set +e
-cargo llvm-cov --summary-only --fail-under-lines "${MIN_COVERAGE}" >"$COV_OUT" 2>&1
+cargo llvm-cov --summary-only \
+  --ignore-filename-regex 'main\.rs' \
+  --fail-under-lines "${MIN_COVERAGE}" >"$COV_OUT" 2>&1
 COV_RC=$?
 set -e
 
 # Always show the TOTAL line for visibility
-grep -E '^(TOTAL|Filename)' "$COV_OUT" | tail -5 || true
+grep -E '^(TOTAL|Filename)' "$COV_OUT" | tail -8 || true
 TOTAL_LINE=$(grep '^TOTAL' "$COV_OUT" | tail -1 || true)
 if [ -n "$TOTAL_LINE" ]; then
   # Columns: Regions Missed Cover | Functions ... | Lines Missed Cover | ...

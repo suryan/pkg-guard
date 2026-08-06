@@ -16,6 +16,11 @@ mod registry;
 mod shim;
 mod typosquat;
 
+#[cfg(test)]
+mod coverage_boost_tests;
+#[cfg(test)]
+mod extra_coverage_tests;
+
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};

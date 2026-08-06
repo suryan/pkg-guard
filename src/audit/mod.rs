@@ -451,7 +451,11 @@ async fn wait_with_timeout(docker: &Docker, container_id: &str) -> Result<i64> {
 }
 
 /// Get the Docker image and install command for each ecosystem.
-fn get_install_config(ecosystem: Ecosystem, package_name: &str, version: &str) -> (String, String) {
+pub(crate) fn get_install_config(
+    ecosystem: Ecosystem,
+    package_name: &str,
+    version: &str,
+) -> (String, String) {
     match ecosystem {
         Ecosystem::Python => (
             "python:3.12-slim".to_string(),
@@ -509,7 +513,7 @@ mvn dependency:resolve -q"
 /// Uses a **sentinel file** touched before install so mtime comparisons are
 /// stable. Does **not** flag the whole of `/root` (npm/pip write caches there).
 /// Pure POSIX shell — no python/node dependency inside the audit image.
-fn build_audit_script(
+pub(crate) fn build_audit_script(
     install_cmd: &str,
     check_network: bool,
     check_filesystem: bool,
@@ -680,7 +684,7 @@ async fn cleanup_container(docker: &Docker, container_id: &str) {
 }
 
 /// Parse the JSON output from the audit container.
-fn parse_audit_output(logs: &str, exit_code: i64) -> ContainerAuditResult {
+pub(crate) fn parse_audit_output(logs: &str, exit_code: i64) -> ContainerAuditResult {
     if exit_code == -1 {
         return ContainerAuditResult {
             install_success: false,
@@ -768,149 +772,4 @@ fn extract_last_json_block(text: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_extract_json_from_mixed_output() {
-        let output = r#"
-Installing package...
-Downloading files...
-{"install_success": true, "suspicious_activity": {"network": false, "filesystem": false, "processes": false}, "network_findings": [], "filesystem_findings": [], "process_findings": []}
-"#;
-        let json = extract_last_json_block(output).expect("should find JSON");
-        let parsed: serde_json::Value = serde_json::from_str(&json).expect("should parse JSON");
-        assert_eq!(parsed["install_success"], true);
-    }
-
-    #[test]
-    fn test_extract_json_no_json() {
-        let output = "Just some plain text output\nwith no JSON";
-        assert!(extract_last_json_block(output).is_none());
-    }
-
-    #[test]
-    fn test_get_install_config_python() {
-        let (image, cmd) = get_install_config(Ecosystem::Python, "requests", "2.31.0");
-        assert!(image.contains("python"));
-        assert!(cmd.contains("requests==2.31.0"));
-    }
-
-    #[test]
-    fn test_get_install_config_npm() {
-        let (image, cmd) = get_install_config(Ecosystem::Npm, "express", "4.18.2");
-        assert!(image.contains("node"));
-        assert!(cmd.contains("express@4.18.2"));
-    }
-
-    #[test]
-    fn test_get_install_config_java() {
-        let (image, cmd) =
-            get_install_config(Ecosystem::Java, "com.google.guava:guava", "32.1.3-jre");
-        assert!(image.contains("maven"));
-        assert!(cmd.contains("com.google.guava"));
-        assert!(cmd.contains("guava"));
-        assert!(cmd.contains("32.1.3-jre"));
-    }
-
-    #[test]
-    fn test_build_audit_script_uses_sentinel_not_install_mtime() {
-        let script = build_audit_script("echo hi", true, true, true);
-        assert!(script.contains("/tmp/pkg-guard-sentinel"));
-        assert!(script.contains("-newer /tmp/pkg-guard-sentinel"));
-        assert!(!script.contains("-newer /install"));
-        // Do not scan entire /root (npm cache false positives)
-        assert!(!script.contains("find /etc /root "));
-        assert!(script.contains("/root/.ssh"));
-    }
-
-    #[test]
-    fn test_is_critical_fs_finding() {
-        assert!(is_critical_fs_finding("/root/.ssh/authorized_keys"));
-        assert!(is_critical_fs_finding("/var/spool/cron/crontabs/root"));
-        assert!(!is_critical_fs_finding("/etc/hosts"));
-        assert!(!is_critical_fs_finding("/etc/ssl/certs/ca.pem"));
-    }
-
-    #[test]
-    fn test_determine_status_fs_is_warn_not_block() {
-        let typosquat = crate::data::TyposquatResult {
-            is_suspicious: false,
-            is_blocklisted: false,
-            blocklist_source: None,
-            similar_to: vec![],
-            min_levenshtein_distance: Some(0),
-            recommendation: "ok".to_string(),
-        };
-        let audit = ContainerAuditResult {
-            install_success: true,
-            suspicious_activity: SuspiciousActivity {
-                network: false,
-                filesystem: true,
-                processes: false,
-            },
-            network_findings: vec![],
-            filesystem_findings: vec!["/etc/hosts".to_string()],
-            process_findings: vec![],
-            error: None,
-        };
-        let mut warnings = Vec::new();
-        let status = determine_status(&typosquat, Some(&audit), &mut warnings);
-        assert!(matches!(status, AuditStatus::Warning));
-        assert!(!warnings.is_empty());
-    }
-
-    #[test]
-    fn test_determine_status_critical_fs_is_block() {
-        let typosquat = crate::data::TyposquatResult {
-            is_suspicious: false,
-            is_blocklisted: false,
-            blocklist_source: None,
-            similar_to: vec![],
-            min_levenshtein_distance: Some(0),
-            recommendation: "ok".to_string(),
-        };
-        let audit = ContainerAuditResult {
-            install_success: true,
-            suspicious_activity: SuspiciousActivity {
-                network: false,
-                filesystem: true,
-                processes: false,
-            },
-            network_findings: vec![],
-            filesystem_findings: vec!["/root/.ssh/authorized_keys".to_string()],
-            process_findings: vec![],
-            error: None,
-        };
-        let mut warnings = Vec::new();
-        let status = determine_status(&typosquat, Some(&audit), &mut warnings);
-        assert!(matches!(status, AuditStatus::Blocked));
-    }
-
-    #[test]
-    fn test_determine_status_network_is_block() {
-        let typosquat = crate::data::TyposquatResult {
-            is_suspicious: false,
-            is_blocklisted: false,
-            blocklist_source: None,
-            similar_to: vec![],
-            min_levenshtein_distance: Some(0),
-            recommendation: "ok".to_string(),
-        };
-        let audit = ContainerAuditResult {
-            install_success: true,
-            suspicious_activity: SuspiciousActivity {
-                network: true,
-                filesystem: false,
-                processes: false,
-            },
-            network_findings: vec!["pastebin.com".to_string()],
-            process_findings: vec![],
-            filesystem_findings: vec![],
-            error: None,
-        };
-        let mut warnings = Vec::new();
-        let status = determine_status(&typosquat, Some(&audit), &mut warnings);
-        assert!(matches!(status, AuditStatus::Blocked));
-    }
-}
+mod tests;

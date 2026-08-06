@@ -277,8 +277,8 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_no_embedded_name_blocklist() {
-        // Isolate from any host feed cache / custom list.
         let dir = std::env::temp_dir().join(format!("pg-empty-bl-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir");

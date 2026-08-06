@@ -142,4 +142,29 @@ mod tests {
     fn test_cargo_test_passthrough() {
         assert!(matches!(plan(&["test".into()]), Plan::PassThrough));
     }
+
+    #[test]
+    fn test_cargo_add_flags_and_install() {
+        match plan(&[
+            "add".into(),
+            "serde".into(),
+            "--features".into(),
+            "derive".into(),
+            "--vers".into(),
+            "1.0.200".into(),
+        ]) {
+            Plan::Gate { packages, .. } => {
+                assert_eq!(packages[0].name, "serde");
+                assert_eq!(packages[0].version.as_deref(), Some("1.0.200"));
+            }
+            Plan::PassThrough => panic!("expected gate"),
+        }
+        match plan(&["install".into(), "ripgrep@14.0.0".into()]) {
+            Plan::Gate { packages, .. } => assert_eq!(packages[0].name, "ripgrep"),
+            Plan::PassThrough => panic!("expected gate"),
+        }
+        assert!(parse_cargo_spec("git+https://x").is_none());
+        assert!(parse_cargo_spec("serde@git").is_some()); // version None for non-digit
+        assert!(find_flag_value(&["--version=1.2.3".into()], &["--vers", "--version"]).is_some());
+    }
 }

@@ -198,4 +198,41 @@ mod tests {
     fn test_max_age_constant() {
         assert_eq!(MAX_CACHE_AGE_DAYS, 7);
     }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_write_reload_stale_and_corrupt() {
+        let dir = std::env::temp_dir().join(format!("pkg-guard-fc-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("PKG_GUARD_CACHE_DIR", &dir);
+
+        // missing → stale
+        reload();
+        assert!(is_stale());
+        assert!(stale_warning().is_some());
+        assert!(cache_age_days().is_none());
+        assert!(!is_feed_blocklisted(Ecosystem::Python, "x"));
+
+        let mut doc = BlocklistDocument::default();
+        doc.python = vec!["feed-evil".into()];
+        doc.sources = vec!["t".into()];
+        doc.updated_at = Some("unix:1".into());
+        doc.normalize();
+        write_cache(&doc).unwrap();
+        assert!(is_feed_blocklisted(Ecosystem::Python, "feed-evil"));
+        assert!(cache_age_days().is_some());
+        let snap = status_snapshot();
+        assert_eq!(snap["exists"], true);
+
+        // corrupt cache
+        fs::write(cache_path(), "not-json").unwrap();
+        reload();
+        let snap = status_snapshot();
+        assert!(!snap["errors"].as_array().unwrap().is_empty());
+
+        std::env::remove_var("PKG_GUARD_CACHE_DIR");
+        reload();
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

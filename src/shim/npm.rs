@@ -132,4 +132,32 @@ mod tests {
     fn test_npm_test_passthrough() {
         assert!(matches!(plan("npm", &["test".into()]), Plan::PassThrough));
     }
+
+    #[test]
+    fn test_npm_flags_scope_and_ci() {
+        match plan(
+            "npm",
+            &[
+                "install".into(),
+                "--registry".into(),
+                "https://registry.npmjs.org".into(),
+                "@scope/pkg@2.0.0".into(),
+                "plain".into(),
+            ],
+        ) {
+            Plan::Gate { packages, .. } => {
+                assert_eq!(packages[0].name, "@scope/pkg");
+                assert_eq!(packages[0].version.as_deref(), Some("2.0.0"));
+                assert_eq!(packages[1].name, "plain");
+            }
+            Plan::PassThrough => panic!("expected gate"),
+        }
+        assert!(parse_npm_spec("git+https://x").is_none());
+        assert!(parse_npm_spec("@scope/only").is_some());
+        // ci without lock in cwd still gates with empty or package.json
+        let r = plan("npm", &["ci".into()]);
+        assert!(matches!(r, Plan::Gate { .. }));
+        let r = plan("pnpm", &["add".into(), "left-pad@1.0.0".into()]);
+        assert!(matches!(r, Plan::Gate { .. }));
+    }
 }

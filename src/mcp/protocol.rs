@@ -136,3 +136,41 @@ impl ToolCallResult {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn serialize_initialize_and_tools() {
+        let init = InitializeResult {
+            protocol_version: "2024-11-05".into(),
+            capabilities: ServerCapabilities {
+                tools: ToolsCapability {
+                    list_changed: false,
+                },
+            },
+            server_info: ServerInfo {
+                name: "pkg-guard".into(),
+                version: "0.0.0".into(),
+            },
+        };
+        let v = serde_json::to_value(&init).unwrap();
+        assert_eq!(v["protocolVersion"], "2024-11-05");
+        let tools = ToolsListResult {
+            tools: vec![ToolDefinition {
+                name: "t".into(),
+                description: "d".into(),
+                input_schema: json!({}),
+            }],
+        };
+        assert!(serde_json::to_string(&tools)
+            .unwrap()
+            .contains("inputSchema"));
+        let req: JsonRpcRequest =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}"#)
+                .unwrap();
+        assert_eq!(req.method, "ping");
+    }
+}

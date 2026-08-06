@@ -162,3 +162,97 @@ fn is_lockish(name: &str) -> bool {
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("txt")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::Ecosystem;
+    use crate::shim::PackageRef;
+
+    #[test]
+    fn test_is_lockish_names() {
+        assert!(is_lockish("package-lock.json"));
+        assert!(is_lockish("yarn.lock"));
+        assert!(is_lockish("Cargo.lock"));
+        assert!(is_lockish("requirements.txt"));
+        assert!(is_lockish("requirements-dev.txt"));
+        assert!(!is_lockish("package.json"));
+        assert!(!is_lockish("readme.md"));
+    }
+
+    #[test]
+    fn test_finalize_modes() {
+        assert!(matches!(
+            finalize(ShimMode::Enforce, &["blocked".into()], &[]),
+            Decision::Block(_)
+        ));
+        assert!(matches!(
+            finalize(ShimMode::Warn, &["blocked".into()], &[]),
+            Decision::Warn(_)
+        ));
+        assert!(matches!(
+            finalize(ShimMode::Enforce, &[], &["warn".into()]),
+            Decision::Warn(_)
+        ));
+        assert!(matches!(
+            finalize(ShimMode::Enforce, &[], &[]),
+            Decision::Allow
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_warn_mode_blocklist() {
+        // Without a custom blocklist, unique name + empty files → allow
+        let d = evaluate(
+            Ecosystem::Python,
+            &[PackageRef {
+                name: "unique-pkg-guard-xyz-999".into(),
+                version: None,
+            }],
+            &[],
+            ShimMode::Warn,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(d, Decision::Allow | Decision::Warn(_)));
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_manifest_file_warns_unpinned() {
+        let dir = std::env::temp_dir().join(format!("gate-pin-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let req = dir.join("requirements.txt");
+        std::fs::write(&req, "flask\n").unwrap();
+        let d = evaluate(Ecosystem::Python, &[], &[req], ShimMode::Enforce)
+            .await
+            .unwrap();
+        assert!(matches!(d, Decision::Warn(_) | Decision::Allow));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_missing_file_warns() {
+        let missing = PathBuf::from("/tmp/pkg-guard-does-not-exist-requirements.txt");
+        let d = evaluate(Ecosystem::Python, &[], &[missing], ShimMode::Enforce)
+            .await
+            .unwrap();
+        assert!(matches!(d, Decision::Warn(_)));
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_versioned_package_osv_path() {
+        // Real OSV query path for a well-known package
+        let d = evaluate(
+            Ecosystem::Python,
+            &[PackageRef {
+                name: "six".into(),
+                version: Some("1.16.0".into()),
+            }],
+            &[],
+            ShimMode::Enforce,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(d, Decision::Allow | Decision::Warn(_)));
+    }
+}

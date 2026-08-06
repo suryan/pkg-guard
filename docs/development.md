@@ -28,31 +28,28 @@ cargo watch -x test -x 'run -- check -e python -p requests'
 ```
 pkg-guard/
 ├── Cargo.toml           # Dependencies and build config
+├── scripts/
+│   └── precommit.sh     # fmt, clippy, tests+coverage (≥90% lines), dogfood
 ├── src/
-│   ├── main.rs          # Entry point, CLI definition
-│   ├── mcp/
-│   │   ├── mod.rs       # Module exports
-│   │   ├── protocol.rs  # JSON-RPC types
-│   │   ├── server.rs    # MCP server loop
-│   │   └── tools.rs     # Tool schemas
-│   ├── typosquat/
-│   │   └── mod.rs       # Detection algorithms
-│   ├── registry/
-│   │   └── mod.rs       # PyPI, npm, Maven clients
-│   ├── parsers/
-│   │   └── mod.rs       # Dependency file parsers
-│   ├── audit/
-│   │   └── mod.rs       # Container orchestrator
-│   └── data/
-│       ├── mod.rs       # Shared types
-│       ├── blocklist.rs          # Lookup: custom → feed (no embedded denylist)
-│       ├── blocklist_format.rs   # Shared JSON schema
-│       ├── custom_blocklist.rs   # User/project custom lists
-│       ├── feed_cache.rs         # update-db cache
-│       └── update_db.rs          # Remote feed refresh
-│   ├── osv/                 # OSV.dev version advisories
-│   ├── shim/                # Transparent pip/npm/cargo multicall
-├── docs/                # Documentation
+│   ├── main.rs          # Entry point, CLI + multicall shim dispatch
+│   ├── mcp/             # JSON-RPC MCP server (protocol, server, tools)
+│   ├── typosquat/       # Similarity / homoglyph detection
+│   ├── registry/        # PyPI, npm, Maven, crates.io clients
+│   ├── parsers/         # Dependency + lockfile parsers
+│   ├── audit/           # Container orchestrator (bollard)
+│   ├── project/         # Whole-repo audit
+│   ├── osv/             # OSV.dev version advisories
+│   ├── shim/            # Transparent pip/npm/cargo multicall
+│   ├── data/            # Blocklist stack + shared types
+│   │   ├── blocklist.rs          # Lookup: custom → feed (no embedded denylist)
+│   │   ├── blocklist_format.rs   # Shared JSON schema
+│   │   ├── custom_blocklist.rs   # User/project custom lists
+│   │   ├── feed_cache.rs         # update-db cache
+│   │   └── update_db.rs          # Remote feed refresh
+│   ├── extra_coverage_tests.rs   # Broad unit tests for coverage gate
+│   └── coverage_boost_tests.rs   # Additional coverage-oriented tests
+├── data/blocklist/      # popular.json, example-feed, default-feeds
+├── docs/
 └── target/              # Build output (gitignored)
 ```
 
@@ -80,12 +77,18 @@ cargo test
 # Run a specific test
 cargo test test_typosquat_detected
 
-# Coverage (required by precommit; default min 35% lines)
+# Coverage (required by precommit; default min 90% lines)
 cargo install cargo-llvm-cov --locked   # once
 rustup component add llvm-tools-preview # once
-cargo llvm-cov --summary-only --fail-under-lines 35
+cargo llvm-cov --summary-only \
+  --ignore-filename-regex 'main\.rs' \
+  --fail-under-lines 90
 cargo llvm-cov --html --output-dir target/llvm-cov   # HTML report
-# Override threshold: PKG_GUARD_MIN_COVERAGE=40 bash scripts/precommit.sh
+# Override threshold only with intentional review:
+#   PKG_GUARD_MIN_COVERAGE=85 bash scripts/precommit.sh
+
+# Full precommit gate (what CI / commit hygiene should run)
+bash scripts/precommit.sh
 
 # Run with verbose output
 RUST_LOG=debug cargo run -- check -e python -p reqeusts
@@ -95,7 +98,8 @@ RUST_LOG=debug cargo run -- check -e python -p reqeusts
 
 ### Unit Tests
 
-Each module has inline `#[cfg(test)]` tests:
+Modules carry inline `#[cfg(test)]` tests; additional coverage-oriented suites live in
+`src/extra_coverage_tests.rs` and `src/coverage_boost_tests.rs`.
 
 ```bash
 # All tests
@@ -107,8 +111,20 @@ cargo test parsers
 cargo test audit
 
 # Coverage summary (same tool as precommit step 4)
-cargo llvm-cov --summary-only
+cargo llvm-cov --summary-only --ignore-filename-regex 'main\.rs'
 ```
+
+### Coverage policy
+
+| Rule | Detail |
+|------|--------|
+| Minimum | **90% line** coverage (`--fail-under-lines 90`) |
+| Scope | All of `src/` **except** `main.rs` (CLI/multicall entrypoint) |
+| Tool | [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) + `llvm-tools-preview` |
+| Override | `PKG_GUARD_MIN_COVERAGE=<n>` for local experiments only |
+| File size | Each `src/**/*.rs` file must stay ≤ **1000** lines (precommit step 1) |
+
+`main.rs` is excluded because it is process entry + `exec`/stdio wiring; behavior is exercised via library unit tests, shim helpers, and the Cargo.lock dogfood step.
 
 ### Manual Testing
 
@@ -201,6 +217,9 @@ against legitimate package names.
 | `PKG_GUARD_BLOCKLIST` | Path to an extra custom blocklist JSON file |
 | `PKG_GUARD_FEED_URLS` | Comma-separated remote feed URLs for `update-db` |
 | `PKG_GUARD_CACHE_DIR` | Override feed cache directory (default `~/.cache/pkg-guard`) |
+| `PKG_GUARD_MIN_COVERAGE` | Precommit line-coverage floor (default **90**) |
+| `PKG_GUARD_SHIM_MODE` | Shim policy: `enforce` (default), `warn`, or `off` |
+| `PKG_GUARD_REAL_<TOOL>` | Absolute path to real package manager (avoids shim recursion) |
 | `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` | Standard XDG roots for config/cache |
 
 ## CI/CD Integration

@@ -299,4 +299,53 @@ mod tests {
         assert!(text.contains("python"));
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn test_load_one_parse_error_and_merge_all_ecos() {
+        let dir = std::env::temp_dir().join(format!("pkg-guard-bl-err-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let bad = dir.join("bad.json");
+        fs::write(&bad, "not-json{{{").unwrap();
+        let mut c = CustomBlocklist::default();
+        load_one(&bad, &mut c);
+        assert!(!c.errors.is_empty());
+
+        let good = dir.join("good.json");
+        fs::write(
+            &good,
+            r#"{"version":1,"python":["a"],"npm":["b"],"java":["g:a"],"cargo":["c"]}"#,
+        )
+        .unwrap();
+        load_one(&good, &mut c);
+        assert!(c.contains(Ecosystem::Python, "a"));
+        assert!(c.contains(Ecosystem::Npm, "b"));
+        assert!(c.contains(Ecosystem::Java, "g:a"));
+        assert!(c.contains(Ecosystem::Cargo, "c"));
+        assert!(c.total_entries() >= 4);
+        load_one(&dir.join("missing.json"), &mut c); // no-op
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_snapshot_and_is_custom_with_env() {
+        let dir = std::env::temp_dir().join(format!("pkg-guard-cbl-env-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("blocklist.json");
+        fs::write(
+            &path,
+            r#"{"python":["custom-only-pkg"],"npm":[],"java":[],"cargo":[]}"#,
+        )
+        .unwrap();
+        std::env::set_var("PKG_GUARD_BLOCKLIST", &path);
+        reload();
+        assert!(is_custom_blocklisted(Ecosystem::Python, "custom-only-pkg"));
+        let snap = snapshot();
+        assert!(snap.total_entries() >= 1);
+        std::env::remove_var("PKG_GUARD_BLOCKLIST");
+        reload();
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

@@ -142,24 +142,33 @@ The `audit_package` tool is intentionally not auto-approved since it launches Do
 
 - **Rust 1.70+** for building
 - **Docker** (optional) for container auditing — if Docker is unavailable, the audit tool skips container checks and still performs typosquat + metadata analysis
+- **cargo-llvm-cov** + `llvm-tools-preview` for the precommit coverage gate (see [docs/development.md](docs/development.md))
+
+## Development checks
+
+```bash
+# Full gate: line counts, fmt, clippy, tests + ≥90% line coverage, Cargo.lock dogfood
+bash scripts/precommit.sh
+```
+
+Coverage is measured with `cargo llvm-cov` on library modules (`main.rs` excluded). Override the floor with `PKG_GUARD_MIN_COVERAGE` only for local experiments.
 
 ## Project Structure
 
 ```
 src/
-├── main.rs          # CLI entry point (clap)
+├── main.rs          # CLI entry point (clap) + multicall shim dispatch
 ├── mcp/             # MCP JSON-RPC server
-│   ├── protocol.rs  # JSON-RPC 2.0 types
-│   ├── server.rs    # Stdio server loop
-│   └── tools.rs     # Tool definitions & schemas
 ├── typosquat/       # Typosquat detection engine
-├── registry/        # PyPI, npm, Maven Central clients
+├── registry/        # PyPI, npm, Maven Central, crates.io clients
 ├── parsers/         # Dependency file parsers
 ├── audit/           # Container audit orchestrator (bollard)
 ├── project/         # Whole-repo manifest + lockfile scanner
+├── osv/             # OSV.dev version advisories
 ├── shim/            # Transparent pip/npm/cargo multicall wrappers
 └── data/            # Blocklist stack + shared types
 data/blocklist/      # popular.json (typosquat); example-feed.json (host yourself)
+scripts/precommit.sh # Quality gate (90% line coverage)
 ```
 
 Also: `pkg-guard shim install|status|uninstall` for PATH-level install gates.

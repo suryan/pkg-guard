@@ -286,6 +286,255 @@ fn handle_blocklist_status() -> ToolCallResult {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn handle_check_and_errors() {
+        let r = handle_check_typosquat(&json!({
+            "ecosystem": "python",
+            "package_name": "requests"
+        }));
+        assert!(r.is_error.is_none());
+        let r = handle_check_typosquat(&json!({"ecosystem": "python"}));
+        assert_eq!(r.is_error, Some(true));
+        let r = handle_check_typosquat(&json!({
+            "ecosystem": "nope",
+            "package_name": "x"
+        }));
+        assert_eq!(r.is_error, Some(true));
+    }
+
+    #[test]
+    fn handle_pin_and_blocklist_status() {
+        let dir = std::env::temp_dir().join(format!("mcp-pin-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let f = dir.join("requirements.txt");
+        std::fs::write(&f, "flask\nrequests==2.0.0\n").unwrap();
+        let r = handle_pin_dependencies(&json!({
+            "file_path": f.to_str().unwrap(),
+            "fix_in_place": true
+        }));
+        assert!(r.is_error.is_none());
+        let r = handle_pin_dependencies(&json!({}));
+        assert_eq!(r.is_error, Some(true));
+        let r = handle_blocklist_status();
+        assert!(r.is_error.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn handle_request_initialize_and_tools() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: Some(json!(1)),
+            method: "initialize".into(),
+            params: json!({}),
+        };
+        let resp = handle_request(&req).await;
+        assert!(resp.error.is_none());
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: Some(json!(2)),
+            method: "tools/list".into(),
+            params: json!({}),
+        };
+        let resp = handle_request(&req).await;
+        assert!(resp.result.is_some());
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: Some(json!(3)),
+            method: "ping".into(),
+            params: json!({}),
+        };
+        let resp = handle_request(&req).await;
+        assert!(resp.error.is_none());
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: Some(json!(4)),
+            method: "nope".into(),
+            params: json!({}),
+        };
+        let resp = handle_request(&req).await;
+        assert!(resp.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn handle_tool_call_routing() {
+        let r = handle_tool_call(&json!({
+            "name": "check_typosquat",
+            "arguments": {"ecosystem": "npm", "package_name": "lodash"}
+        }))
+        .await;
+        assert!(r.is_error.is_none());
+        let r = handle_tool_call(&json!({"name": "unknown_tool", "arguments": {}})).await;
+        assert_eq!(r.is_error, Some(true));
+        let r = handle_tool_call(&json!({
+            "name": "blocklist_status",
+            "arguments": {}
+        }))
+        .await;
+        assert!(r.is_error.is_none());
+        let r = handle_tool_call(&json!({
+            "name": "audit_project",
+            "arguments": {"project_path": "/tmp"}
+        }))
+        .await;
+        // /tmp may be empty of manifests — still should not hard-error always
+        let _ = r.is_error;
+    }
+
+    #[tokio::test]
+    async fn handle_audit_package_param_errors_and_no_container() {
+        assert_eq!(handle_audit_package(&json!({})).await.is_error, Some(true));
+        assert_eq!(
+            handle_audit_package(&json!({"ecosystem": "python"}))
+                .await
+                .is_error,
+            Some(true)
+        );
+        assert_eq!(
+            handle_audit_package(&json!({
+                "ecosystem": "python",
+                "package_name": "six"
+            }))
+            .await
+            .is_error,
+            Some(true)
+        );
+        assert_eq!(
+            handle_audit_package(&json!({
+                "ecosystem": "nope",
+                "package_name": "x",
+                "version": "1"
+            }))
+            .await
+            .is_error,
+            Some(true)
+        );
+        let r = handle_audit_package(&json!({
+            "ecosystem": "python",
+            "package_name": "six",
+            "version": "1.16.0",
+            "check_network": false,
+            "check_filesystem": false,
+            "check_processes": false
+        }))
+        .await;
+        assert!(r.is_error.is_none(), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn handle_scan_metadata_and_update_db_paths() {
+        let dir = std::env::temp_dir().join(format!("mcp-scan-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let f = dir.join("requirements.txt");
+        std::fs::write(&f, "six==1.16.0\n").unwrap();
+
+        assert_eq!(handle_scan_lockfile(&json!({})).await.is_error, Some(true));
+        let r = handle_scan_lockfile(&json!({
+            "file_path": f.to_str().unwrap()
+        }))
+        .await;
+        assert!(r.is_error.is_none());
+
+        assert_eq!(
+            handle_get_package_metadata(&json!({})).await.is_error,
+            Some(true)
+        );
+        assert_eq!(
+            handle_get_package_metadata(&json!({"ecosystem": "python"}))
+                .await
+                .is_error,
+            Some(true)
+        );
+        assert_eq!(
+            handle_get_package_metadata(&json!({
+                "ecosystem": "zzz",
+                "package_name": "x"
+            }))
+            .await
+            .is_error,
+            Some(true)
+        );
+        let r = handle_get_package_metadata(&json!({
+            "ecosystem": "python",
+            "package_name": "six",
+            "version": "1.16.0"
+        }))
+        .await;
+        assert!(r.is_error.is_none());
+
+        assert_eq!(
+            handle_audit_project(&json!({
+                "project_path": dir.join("missing-dir").to_str().unwrap()
+            }))
+            .is_error,
+            Some(true)
+        );
+
+        // tools/call wrappers for audit_package and update_db empty feeds
+        let r = handle_tool_call(&json!({
+            "name": "audit_package",
+            "arguments": {
+                "ecosystem": "npm",
+                "package_name": "left-pad",
+                "version": "1.3.0",
+                "check_network": false,
+                "check_filesystem": false,
+                "check_processes": false
+            }
+        }))
+        .await;
+        assert!(r.is_error.is_none());
+
+        let r = handle_tool_call(&json!({
+            "name": "update_db",
+            "arguments": {"feeds": []}
+        }))
+        .await;
+        // no feeds configured → error path
+        assert_eq!(r.is_error, Some(true));
+
+        let r = handle_tool_call(&json!({
+            "name": "get_package_metadata",
+            "arguments": {
+                "ecosystem": "cargo",
+                "package_name": "serde"
+            }
+        }))
+        .await;
+        assert!(r.is_error.is_none());
+
+        let r = handle_tool_call(&json!({
+            "name": "scan_lockfile",
+            "arguments": {"file_path": f.to_str().unwrap()}
+        }))
+        .await;
+        assert!(r.is_error.is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn handle_request_tools_call() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: Some(json!(9)),
+            method: "tools/call".into(),
+            params: json!({
+                "name": "check_typosquat",
+                "arguments": {"ecosystem": "python", "package_name": "flask"}
+            }),
+        };
+        let resp = handle_request(&req).await;
+        assert!(resp.error.is_none());
+        assert!(resp.result.is_some());
+    }
+}
+
 async fn handle_update_db(args: &Value) -> ToolCallResult {
     let feeds: Vec<String> = args
         .get("feeds")

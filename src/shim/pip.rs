@@ -97,25 +97,23 @@ fn parse_requirement(spec: &str) -> Option<PackageRef> {
         return None; // local / VCS — skip deep parse
     }
 
-    // Strip extras: name[extra]
-    let base = spec.split('[').next()?.trim();
-    if base.is_empty() {
-        return None;
-    }
+    // Drop env markers first: `name==1.0; python_version>="3"`
+    let spec = spec.split(';').next()?.trim();
 
-    // Exact pin
-    if let Some((name, ver)) = base.split_once("==") {
-        let name = name.trim();
-        let ver = ver.split(';').next()?.trim(); // env markers
+    // Exact pin may appear after extras: `name[extra]==1.2.3`
+    if let Some((left, ver)) = spec.split_once("==") {
+        let name = strip_extras(left.trim());
+        let ver = ver.trim();
         if !name.is_empty() && !ver.is_empty() {
             return Some(PackageRef {
-                name: name.to_string(),
+                name,
                 version: Some(ver.to_string()),
             });
         }
     }
 
-    // name only (or other operators) — take leading identifier
+    // name only (or other operators) — strip extras then take identifier
+    let base = strip_extras(spec);
     let name: String = base
         .chars()
         .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
@@ -127,6 +125,11 @@ fn parse_requirement(spec: &str) -> Option<PackageRef> {
         name,
         version: None,
     })
+}
+
+/// `name[extra,other]` → `name`
+fn strip_extras(spec: &str) -> String {
+    spec.split('[').next().unwrap_or(spec).trim().to_string()
 }
 
 #[cfg(test)]
@@ -164,5 +167,38 @@ mod tests {
     fn test_pip_list_passthrough() {
         let args = vec!["list".into()];
         assert!(matches!(plan(&args), Plan::PassThrough));
+    }
+
+    #[test]
+    fn test_pip_install_flag_value_pairs_and_extras() {
+        match plan(&[
+            "install".into(),
+            "-i".into(),
+            "https://pypi.org/simple".into(),
+            "--target".into(),
+            "/tmp/t".into(),
+            "pkg[extra]==1.2.3".into(),
+            "other".into(),
+        ]) {
+            Plan::Gate { packages, .. } => {
+                assert_eq!(packages[0].name, "pkg");
+                assert_eq!(packages[0].version.as_deref(), Some("1.2.3"));
+                assert_eq!(packages[1].name, "other");
+            }
+            Plan::PassThrough => panic!("expected gate"),
+        }
+        // local / vcs skipped
+        assert!(matches!(
+            plan(&["install".into(), ".".into(), "git+https://x".into()]),
+            Plan::PassThrough
+        ));
+        // bare requirements path as positional
+        match plan(&["install".into(), "requirements-dev.txt".into()]) {
+            Plan::Gate { files, .. } => assert_eq!(files.len(), 1),
+            Plan::PassThrough => panic!("expected gate"),
+        }
+        assert!(parse_requirement("").is_none());
+        assert!(parse_requirement("./local").is_none());
+        assert!(parse_requirement("name>=1").is_some());
     }
 }
