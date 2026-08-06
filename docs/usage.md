@@ -85,6 +85,51 @@ pkg-guard scan -f package-lock.json
 
 MCP: `blocklist_status`, `update_db` (optional `feeds: string[]`).
 
+## Transparent package-manager shims
+
+`pkg-guard` can **look like** `pip` / `npm` / `cargo` (multicall via symlink). On
+install-like commands it runs policy checks, then `exec`s the real tool.
+
+### Issues with transparent calls (and mitigations)
+
+| Issue | Mitigation |
+|-------|------------|
+| Recursion (`pip` → pkg-guard → `pip` → …) | Real binary resolution **skips this executable**; override with `PKG_GUARD_REAL_PIP` etc. |
+| Bypass via `/usr/bin/pip` | Documented; shims only work when early on `PATH` |
+| Incomplete CLI parsing | Only common install forms gated; exotic URLs/paths pass through or skip |
+| Slow gates | Default is name blocklist + OSV when version known; **no** Docker audit on every install |
+| Scripts calling absolute paths | CI still needs `pkg-guard project` / scan |
+
+### Install shims
+
+```bash
+cargo build --release
+cp target/release/pkg-guard ~/.local/bin/
+pkg-guard shim install --dir ~/.local/bin
+# ensure ~/.local/bin is before /usr/bin on PATH
+pkg-guard shim status
+
+# Modes
+export PKG_GUARD_SHIM_MODE=enforce   # default: block bad installs
+export PKG_GUARD_SHIM_MODE=warn      # print warning, still install
+export PKG_GUARD_SHIM_MODE=off       # fully transparent
+
+# Point at the real tools if auto-detect fails
+export PKG_GUARD_REAL_PIP=/usr/bin/pip3
+export PKG_GUARD_REAL_NPM=/usr/bin/npm
+export PKG_GUARD_REAL_CARGO=$HOME/.cargo/bin/cargo
+```
+
+Then:
+
+```bash
+pip install requests==2.31.0     # gated, then real pip
+pip install reqeusts             # BLOCKED if on feed/custom blocklist
+npm install lodash@4.17.21
+cargo add serde@1.0
+pip list                         # pass-through, no gate
+```
+
 ## CLI Usage
 
 ### Check a Package for Typosquatting

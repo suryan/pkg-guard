@@ -49,6 +49,11 @@ pkg-guard update-db --feed https://example.com/blocklist.json
 
 # Start as MCP server (for IDE integration)
 pkg-guard serve
+
+# Transparent PM shims (looks like pip/npm/cargo, gates installs)
+pkg-guard shim install --dir ~/.local/bin
+pkg-guard shim status
+# PKG_GUARD_SHIM_MODE=enforce|warn|off
 ```
 
 ## Blocklist layers

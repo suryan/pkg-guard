@@ -1,7 +1,10 @@
 //! pkg-guard — Package security guardian
 //!
 //! A single-binary MCP server and CLI tool that audits software packages
-//! for supply chain attacks across Python, npm, and Java ecosystems.
+//! for supply chain attacks across Python, npm, Java, and Cargo ecosystems.
+//!
+//! Also supports **transparent package-manager shims**: install as `pip`/`npm`/
+//! `cargo` (symlink) to gate installs before exec'ing the real tool.
 
 mod audit;
 mod data;
@@ -10,7 +13,10 @@ mod osv;
 mod parsers;
 mod project;
 mod registry;
+mod shim;
 mod typosquat;
+
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
@@ -81,6 +87,37 @@ enum Commands {
         #[arg(long = "feed")]
         feeds: Vec<String>,
     },
+    /// Manage transparent package-manager shims (multicall)
+    Shim {
+        #[command(subcommand)]
+        action: ShimCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ShimCmd {
+    /// Create symlinks (pip, npm, cargo, …) pointing at this binary
+    Install {
+        /// Directory for shims (default: ~/.local/bin)
+        #[arg(long, short = 'd')]
+        dir: Option<PathBuf>,
+        /// Comma-separated tools (default: pip,pip3,npm,npx,cargo)
+        #[arg(long, default_value = "pip,pip3,npm,npx,cargo")]
+        tools: String,
+    },
+    /// Show shim mode, real binaries, and env overrides
+    Status {
+        /// Comma-separated tools to inspect
+        #[arg(long, default_value = "pip,pip3,npm,npx,cargo")]
+        tools: String,
+    },
+    /// Remove shim symlinks previously installed
+    Uninstall {
+        #[arg(long, short = 'd')]
+        dir: Option<PathBuf>,
+        #[arg(long, default_value = "pip,pip3,npm,npx,cargo")]
+        tools: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -100,13 +137,38 @@ enum BlocklistCmd {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize tracing — logs go to stderr so they don't interfere with MCP stdio
+    // Shim mode: quiet by default unless RUST_LOG or PKG_GUARD_SHIM_VERBOSE=1
+    let filter = if std::env::var_os("RUST_LOG").is_some() {
+        EnvFilter::from_default_env()
+    } else if std::env::var("PKG_GUARD_SHIM_VERBOSE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        EnvFilter::new("info")
+    } else {
+        EnvFilter::new("warn")
+    };
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .with_target(false)
         .init();
 
-    let cli = Cli::parse();
+    // Multicall: if argv[0] is pip/npm/cargo/… run transparent shim instead of clap.
+    let mut argv: Vec<String> = std::env::args().collect();
+    if let Some(prog) = argv.first() {
+        let stem = shim::program_stem(prog);
+        if shim::is_wrapper_name(stem) {
+            let code = shim::run(stem, &argv[1..]).await?;
+            std::process::exit(code);
+        }
+    }
+
+    // Ensure clap sees a stable binary name when invoked via odd paths
+    if let Some(first) = argv.first_mut() {
+        *first = "pkg-guard".to_string();
+    }
+    let cli = Cli::parse_from(argv);
 
     match cli.command {
         Commands::Serve => {
@@ -143,9 +205,74 @@ async fn main() -> anyhow::Result<()> {
             let result = data::update_db::update_db(&feeds).await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
+        Commands::Shim { action } => run_shim_cmd(action)?,
     }
 
     Ok(())
+}
+
+fn run_shim_cmd(action: ShimCmd) -> anyhow::Result<()> {
+    match action {
+        ShimCmd::Install { dir, tools } => {
+            let dir = dir.unwrap_or_else(default_shim_dir);
+            let tool_list = parse_tool_list(&tools);
+            let created = shim::install_shims(&dir, &tool_list)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "installed": created,
+                    "dir": dir,
+                    "next_steps": [
+                        format!("Ensure {} is early on your PATH", dir.display()),
+                        "Optional: export PKG_GUARD_REAL_PIP=$(which -a pip | tail -1)",
+                        "Mode: PKG_GUARD_SHIM_MODE=enforce|warn|off",
+                        "pkg-guard shim status",
+                    ],
+                }))?
+            );
+        }
+        ShimCmd::Status { tools } => {
+            let tool_list = parse_tool_list(&tools);
+            let refs: Vec<&str> = tool_list.iter().map(String::as_str).collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&shim::status_report(&refs))?
+            );
+        }
+        ShimCmd::Uninstall { dir, tools } => {
+            let dir = dir.unwrap_or_else(default_shim_dir);
+            let tool_list = parse_tool_list(&tools);
+            let mut removed = Vec::new();
+            for tool in &tool_list {
+                let link = dir.join(tool);
+                if link.symlink_metadata().is_ok() {
+                    std::fs::remove_file(&link)?;
+                    removed.push(link);
+                }
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "removed": removed }))?
+            );
+        }
+    }
+    Ok(())
+}
+
+fn default_shim_dir() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_BIN_HOME") {
+        return PathBuf::from(xdg);
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".local/bin")
+}
+
+fn parse_tool_list(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn run_blocklist_cmd(action: BlocklistCmd) -> anyhow::Result<()> {
