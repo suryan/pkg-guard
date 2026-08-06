@@ -107,6 +107,7 @@ pub async fn audit_package(
                 ecosystem: format!("{ecosystem}"),
                 advisories: vec![],
                 error: Some(e.to_string()),
+                source: None,
             })
         }
     };

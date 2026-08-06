@@ -201,6 +201,8 @@ fn mcp_tool_definitions_include_expected() {
         "audit_project",
         "blocklist_status",
         "update_db",
+        "osv_status",
+        "osv_update",
     ] {
         assert!(names.contains(&n), "missing tool {n}");
     }
@@ -525,6 +527,7 @@ fn osv_query_result_helpers() {
             details_url: None,
         }],
         error: None,
+        source: Some("test".into()),
     };
     assert!(r.has_malware());
     assert!(r.has_critical_or_high());

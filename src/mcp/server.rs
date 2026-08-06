@@ -10,7 +10,7 @@ use super::protocol::{
     ToolCallResult, ToolsCapability, ToolsListResult,
 };
 use super::tools::get_tool_definitions;
-use crate::{audit, data, parsers, project, registry, typosquat};
+use crate::{audit, data, osv, parsers, project, registry, typosquat};
 
 const SERVER_NAME: &str = "pkg-guard";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -116,6 +116,8 @@ async fn handle_tool_call(params: &Value) -> ToolCallResult {
         "audit_project" => handle_audit_project(&arguments),
         "blocklist_status" => handle_blocklist_status(),
         "update_db" => handle_update_db(&arguments).await,
+        "osv_status" => handle_osv_status(),
+        "osv_update" => handle_osv_update(&arguments).await,
         _ => ToolCallResult::error(format!("Unknown tool: {tool_name}")),
     }
 }
@@ -273,10 +275,11 @@ fn handle_blocklist_status() -> ToolCallResult {
         },
         "feed_cache": data::feed_cache::status_snapshot(),
         "default_feeds": "data/blocklist/default-feeds.json (URL list only; enable + host feeds yourself)",
-        "osv": "OSV.dev version advisories used by audit_package and scan_lockfile",
+        "osv": osv::status_snapshot(),
         "hints": [
             "No denylist is embedded in the binary",
             "update_db --feed <url> to load name blocklists",
+            "osv_update / pkg-guard osv update for local OSV dumps",
             "blocklist init for zero-day custom names",
         ],
     });
@@ -533,6 +536,33 @@ mod tests {
         assert!(resp.error.is_none());
         assert!(resp.result.is_some());
     }
+
+    #[test]
+    fn handle_osv_status_ok() {
+        let r = handle_osv_status();
+        assert!(r.is_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn handle_osv_update_bad_ecosystem() {
+        let r = handle_osv_update(&json!({
+            "ecosystems": ["not-an-eco"]
+        }))
+        .await;
+        assert_eq!(r.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn handle_osv_update_all_fail() {
+        std::env::set_var("PKG_GUARD_OSV_DUMP_BASE", "http://127.0.0.1:1");
+        let r = handle_osv_update(&json!({
+            "ecosystems": ["cargo"]
+        }))
+        .await;
+        assert_eq!(r.is_error, Some(true));
+        std::env::remove_var("PKG_GUARD_OSV_DUMP_BASE");
+    }
 }
 
 async fn handle_update_db(args: &Value) -> ToolCallResult {
@@ -546,12 +576,58 @@ async fn handle_update_db(args: &Value) -> ToolCallResult {
                 .collect()
         })
         .unwrap_or_default();
+    let also_osv = args.get("osv").and_then(Value::as_bool).unwrap_or(false);
 
     match data::update_db::update_db(&feeds).await {
+        Ok(result) => {
+            if also_osv {
+                match osv::update_osv(&[]).await {
+                    Ok(osv_result) => {
+                        let combined = serde_json::json!({
+                            "feeds": result,
+                            "osv": osv_result,
+                        });
+                        let json = serde_json::to_string_pretty(&combined).unwrap_or_default();
+                        ToolCallResult::text(json)
+                    }
+                    Err(e) => {
+                        ToolCallResult::error(format!("feeds updated but osv update failed: {e}"))
+                    }
+                }
+            } else {
+                let json = serde_json::to_string_pretty(&result).unwrap_or_default();
+                ToolCallResult::text(json)
+            }
+        }
+        Err(e) => ToolCallResult::error(format!("update_db failed: {e}")),
+    }
+}
+
+fn handle_osv_status() -> ToolCallResult {
+    match serde_json::to_string_pretty(&osv::status_snapshot()) {
+        Ok(json) => ToolCallResult::text(json),
+        Err(e) => ToolCallResult::error(format!("Failed to serialize OSV status: {e}")),
+    }
+}
+
+async fn handle_osv_update(args: &Value) -> ToolCallResult {
+    let mut ecos = Vec::new();
+    if let Some(arr) = args.get("ecosystems").and_then(Value::as_array) {
+        for v in arr {
+            let Some(s) = v.as_str() else {
+                continue;
+            };
+            match data::Ecosystem::from_str(s) {
+                Ok(e) => ecos.push(e),
+                Err(e) => return ToolCallResult::error(e.to_string()),
+            }
+        }
+    }
+    match osv::update_osv(&ecos).await {
         Ok(result) => {
             let json = serde_json::to_string_pretty(&result).unwrap_or_default();
             ToolCallResult::text(json)
         }
-        Err(e) => ToolCallResult::error(format!("update_db failed: {e}")),
+        Err(e) => ToolCallResult::error(format!("osv_update failed: {e}")),
     }
 }

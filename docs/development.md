@@ -220,7 +220,28 @@ against legitimate package names.
 | `PKG_GUARD_MIN_COVERAGE` | Precommit line-coverage floor (default **90**) |
 | `PKG_GUARD_SHIM_MODE` | Shim policy: `enforce` (default), `warn`, or `off` |
 | `PKG_GUARD_REAL_<TOOL>` | Absolute path to real package manager (avoids shim recursion) |
+| `PKG_GUARD_OSV_MODE` | OSV lookup: `auto` (local dump if present, else API), `local`, `online` |
 | `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` | Standard XDG roots for config/cache |
+
+## Local OSV dumps (offline advisories)
+
+By default `scan` / `audit` query the live OSV API. To scan against a **local dump**:
+
+```bash
+# Download per-ecosystem zips and build package indexes (~ tens–hundreds of MB)
+pkg-guard osv update
+# or only cargo+python:  pkg-guard osv update -e python,cargo
+pkg-guard osv status
+
+# Force offline lookups
+PKG_GUARD_OSV_MODE=local pkg-guard scan -f Cargo.lock
+
+# auto (default): use local index when present, else api.osv.dev
+pkg-guard scan -f Cargo.lock
+```
+
+Indexes live under `~/.cache/pkg-guard/osv/` (or `$PKG_GUARD_CACHE_DIR/osv/`).
+Refresh periodically (stale after 7 days in status).
 
 ## CI/CD Integration
 

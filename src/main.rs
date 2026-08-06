@@ -91,12 +91,32 @@ enum Commands {
         /// Also reads comma-separated `PKG_GUARD_FEED_URLS` and enabled default-feeds.json URLs.
         #[arg(long = "feed")]
         feeds: Vec<String>,
+        /// Also download OSV ecosystem dumps and build a local index
+        #[arg(long)]
+        osv: bool,
+    },
+    /// Local OSV vulnerability dump (download + offline scan)
+    Osv {
+        #[command(subcommand)]
+        action: OsvCmd,
     },
     /// Manage transparent package-manager shims (multicall)
     Shim {
         #[command(subcommand)]
         action: ShimCmd,
     },
+}
+
+#[derive(Subcommand)]
+enum OsvCmd {
+    /// Download OSV ecosystem dumps and build a local package index
+    Update {
+        /// Comma-separated ecosystems: python,npm,java,cargo (default: all)
+        #[arg(long, short = 'e')]
+        ecosystems: Option<String>,
+    },
+    /// Show local dump status and lookup mode
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -206,14 +226,48 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Commands::Blocklist { action } => run_blocklist_cmd(action)?,
-        Commands::UpdateDb { feeds } => {
+        Commands::UpdateDb { feeds, osv } => {
             let result = data::update_db::update_db(&feeds).await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
+            if osv {
+                let osv_result = osv::update_osv(&[]).await?;
+                println!("{}", serde_json::to_string_pretty(&osv_result)?);
+            }
         }
+        Commands::Osv { action } => run_osv_cmd(action).await?,
         Commands::Shim { action } => run_shim_cmd(action)?,
     }
 
     Ok(())
+}
+
+async fn run_osv_cmd(action: OsvCmd) -> anyhow::Result<()> {
+    match action {
+        OsvCmd::Update { ecosystems } => {
+            let ecos = parse_ecosystem_list(ecosystems.as_deref())?;
+            let result = osv::update_osv(&ecos).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        OsvCmd::Status => {
+            println!("{}", serde_json::to_string_pretty(&osv::status_snapshot())?);
+        }
+    }
+    Ok(())
+}
+
+fn parse_ecosystem_list(s: Option<&str>) -> anyhow::Result<Vec<data::Ecosystem>> {
+    let Some(s) = s else {
+        return Ok(vec![]);
+    };
+    let mut out = Vec::new();
+    for part in s.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        out.push(data::Ecosystem::from_str(part)?);
+    }
+    Ok(out)
 }
 
 fn run_shim_cmd(action: ShimCmd) -> anyhow::Result<()> {

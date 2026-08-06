@@ -14,6 +14,8 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
         audit_project_tool(),
         blocklist_status_tool(),
         update_db_tool(),
+        osv_status_tool(),
+        osv_update_tool(),
     ]
 }
 
@@ -204,7 +206,7 @@ fn update_db_tool() -> ToolDefinition {
         name: "update_db".to_string(),
         description: "Refresh the feed cache from remote feed URLs only (no embedded seed). \
             Requires --feed / feeds[] / PKG_GUARD_FEED_URLS / enabled default-feeds. \
-            Writes ~/.cache/pkg-guard/blocklist-cache.json."
+            Writes ~/.cache/pkg-guard/blocklist-cache.json. Set osv=true to also download OSV dumps."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -213,6 +215,49 @@ fn update_db_tool() -> ToolDefinition {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Optional extra feed URLs (JSON blocklist documents). Defaults from PKG_GUARD_FEED_URLS and data/blocklist/default-feeds.json apply when empty."
+                },
+                "osv": {
+                    "type": "boolean",
+                    "description": "Also download OSV ecosystem dumps and build local indexes (default: false)",
+                    "default": false
+                }
+            },
+            "required": []
+        }),
+    }
+}
+
+fn osv_status_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "osv_status".to_string(),
+        description: "Show local OSV dump status (path, age, ecosystems) and lookup mode \
+            (PKG_GUARD_OSV_MODE=auto|local|online)."
+            .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        }),
+    }
+}
+
+fn osv_update_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "osv_update".to_string(),
+        description: "Download OSV.dev ecosystem dumps (PyPI/npm/Maven/crates.io) from the public \
+            GCS bucket and build a local package→advisory index for offline scanning. \
+            Large ecosystems (npm) may take several minutes and ~200MB+ download."
+            .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "ecosystems": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["python", "npm", "java", "cargo"]
+                    },
+                    "description": "Ecosystems to download (default: all four)"
                 }
             },
             "required": []

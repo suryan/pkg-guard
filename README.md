@@ -88,8 +88,20 @@ Cache: `~/.cache/pkg-guard/blocklist-cache.json` (override with `PKG_GUARD_CACHE
 
 ### OSV version advisories
 
-`audit` and `scan` query [OSV.dev](https://osv.dev) for the resolved package version
-(CVEs and `MAL-*` malware IDs). Malware / CRITICAL / HIGH → BLOCK; other hits → WARN.
+`audit` and `scan` check package versions for CVEs / `MAL-*` IDs.
+
+**Local dump (recommended for offline/CI):**
+
+```bash
+pkg-guard osv update              # download ecosystem dumps + build index
+pkg-guard osv status
+PKG_GUARD_OSV_MODE=local pkg-guard scan -f Cargo.lock
+```
+
+**Live API:** used when no local index exists, or with `PKG_GUARD_OSV_MODE=online`.
+
+Default mode is **`auto`**: local index if present, else [api.osv.dev](https://osv.dev).
+Malware / CRITICAL / HIGH → BLOCK; other hits → WARN.
 
 ### What *is* embedded
 

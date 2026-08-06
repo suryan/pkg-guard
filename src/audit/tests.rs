@@ -226,6 +226,7 @@ fn test_elevate_and_osv_helpers() {
             details_url: None,
         }],
         error: None,
+        source: Some("test".into()),
     };
     assert!(matches!(
         elevate_with_osv(AuditStatus::Pass, Some(&osv)),
@@ -262,6 +263,7 @@ fn test_elevate_and_osv_helpers() {
             ecosystem: "PyPI".into(),
             advisories: vec![],
             error: Some("net".into()),
+            source: None,
         }),
         &mut warnings,
     );
@@ -283,6 +285,7 @@ fn test_elevate_and_osv_helpers() {
                 details_url: None,
             }],
             error: None,
+            source: Some("local".into()),
         }),
         &mut warnings,
     );

@@ -247,6 +247,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_shim_mode_from_env() {
         std::env::set_var("PKG_GUARD_SHIM_MODE", "off");
         assert_eq!(ShimMode::from_env(), ShimMode::Off);
@@ -279,25 +280,25 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_run_off_mode_and_passthrough_plans() {
+        // Never allow exec of a real package manager — always force a missing override.
         std::env::set_var("PKG_GUARD_SHIM_MODE", "off");
-        // Pass-through will try to exec real binary — use a missing override to get Result::Err
-        // rather than replacing the test process.
         std::env::set_var("PKG_GUARD_REAL_PIP", "/nonexistent/pkg-guard-real-pip-xyz");
         let err = run("pip", &["list".into()]).await;
         assert!(err.is_err());
-        std::env::remove_var("PKG_GUARD_REAL_PIP");
 
-        // Unknown wrapper stem with enforce still pass-throughs
         std::env::set_var("PKG_GUARD_SHIM_MODE", "enforce");
         std::env::set_var("PKG_GUARD_REAL_MVN", "/nonexistent/mvn-xyz");
         let err = run("mvn", &["--version".into()]).await;
         assert!(err.is_err());
         std::env::remove_var("PKG_GUARD_REAL_MVN");
+        std::env::remove_var("PKG_GUARD_REAL_PIP");
         std::env::remove_var("PKG_GUARD_SHIM_MODE");
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_run_gate_block_returns_2() {
         let dir = std::env::temp_dir().join(format!("shim-run-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
@@ -309,6 +310,8 @@ mod tests {
         .unwrap();
         std::env::set_var("PKG_GUARD_BLOCKLIST", &bl);
         std::env::set_var("PKG_GUARD_CACHE_DIR", &dir);
+        // Always override real binary so pass-through cannot replace this process.
+        std::env::set_var("PKG_GUARD_REAL_PIP", "/nonexistent/pkg-guard-real-pip-xyz");
         std::env::set_var("PKG_GUARD_SHIM_MODE", "enforce");
         crate::data::custom_blocklist::reload();
         crate::data::feed_cache::reload();
@@ -318,9 +321,8 @@ mod tests {
             .unwrap();
         assert_eq!(code, 2);
 
+        // warn mode: still blocked by policy message path, then pass-through fails on missing real pip
         std::env::set_var("PKG_GUARD_SHIM_MODE", "warn");
-        // warn mode tries pass-through after warn
-        std::env::set_var("PKG_GUARD_REAL_PIP", "/nonexistent/pip-after-warn");
         let err = run("pip", &["install".into(), "evil-shim-block==1.0.0".into()]).await;
         assert!(err.is_err());
 

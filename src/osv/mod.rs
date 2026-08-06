@@ -1,16 +1,27 @@
-//! OSV.dev advisory client — version-aware CVE / malware lookups.
+//! OSV advisory lookups — **local dump preferred**, live API fallback.
 //!
-//! Uses `POST https://api.osv.dev/v1/query` and `/v1/querybatch`.
-//! Ecosystems map: python → `PyPI`, npm → `npm`, java → `Maven`.
+//! ## Modes (`PKG_GUARD_OSV_MODE`)
+//! - `auto` (default): use local index when present; fall back to api.osv.dev
+//! - `local`: only the dump built by `pkg-guard osv update`
+//! - `online`: only the live API (previous behaviour)
+//!
+//! ## Local data
+//! Per-ecosystem zips from
+//! `https://storage.googleapis.com/osv-vulnerabilities/<ECOSYSTEM>/all.zip`
+//! are downloaded and indexed under `~/.cache/pkg-guard/osv/`.
 
-use anyhow::{anyhow, Context, Result};
+mod local;
+mod remote;
+mod update;
+mod version;
+
+pub use local::{has_index, status_snapshot};
+pub use update::update_osv;
+
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tracing::debug;
 
 use crate::data::Ecosystem;
-
-const OSV_QUERY_URL: &str = "https://api.osv.dev/v1/query";
-const OSV_BATCH_URL: &str = "https://api.osv.dev/v1/querybatch";
 
 /// One vulnerability from OSV relevant to a package version.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +54,9 @@ pub struct OsvQueryResult {
     pub ecosystem: String,
     pub advisories: Vec<OsvAdvisory>,
     pub error: Option<String>,
+    /// `local` or `online` when known
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 impl OsvQueryResult {
@@ -59,7 +73,34 @@ impl OsvQueryResult {
     }
 }
 
-fn osv_ecosystem(eco: Ecosystem) -> &'static str {
+/// How OSV lookups are resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OsvMode {
+    /// Local index if available, else live API.
+    Auto,
+    /// Local dump only.
+    Local,
+    /// Live api.osv.dev only.
+    Online,
+}
+
+impl OsvMode {
+    /// Read `PKG_GUARD_OSV_MODE` (`auto`|`local`|`online`).
+    #[must_use]
+    pub fn from_env() -> Self {
+        match std::env::var("PKG_GUARD_OSV_MODE")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "local" | "offline" | "dump" => Self::Local,
+            "online" | "remote" | "api" => Self::Online,
+            _ => Self::Auto,
+        }
+    }
+}
+
+pub(crate) fn osv_ecosystem(eco: Ecosystem) -> &'static str {
     match eco {
         Ecosystem::Python => "PyPI",
         Ecosystem::Npm => "npm",
@@ -68,181 +109,23 @@ fn osv_ecosystem(eco: Ecosystem) -> &'static str {
     }
 }
 
-/// Maven OSV names are typically `groupId:artifactId` (same string form we use).
-fn osv_package_name(_eco: Ecosystem, package_name: &str) -> String {
+pub(crate) fn osv_package_name(package_name: &str) -> String {
     package_name.to_string()
 }
 
-fn http_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .user_agent(concat!("pkg-guard/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .context("Failed to create OSV HTTP client")
+/// Shared severity fields from dump or API vuln objects.
+pub(crate) struct OsvVulnLike {
+    pub severity: Option<Vec<OsvSeverity>>,
+    pub database_specific: Option<serde_json::Value>,
 }
 
-/// Query OSV for a single package version.
-///
-/// # Errors
-/// Returns an error on transport/parse failures (caller may degrade gracefully).
-pub async fn query_package(
-    ecosystem: Ecosystem,
-    package_name: &str,
-    version: &str,
-) -> Result<OsvQueryResult> {
-    let client = http_client()?;
-    let eco = osv_ecosystem(ecosystem);
-    let name = osv_package_name(ecosystem, package_name);
-
-    let body = serde_json::json!({
-        "version": version,
-        "package": {
-            "name": name,
-            "ecosystem": eco,
-        }
-    });
-
-    debug!("OSV query {eco}/{name}@{version}");
-
-    let response = client
-        .post(OSV_QUERY_URL)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| anyhow!("OSV request failed: {e}"))?;
-
-    if !response.status().is_success() {
-        return Err(anyhow!("OSV returned HTTP {}", response.status()));
-    }
-
-    let payload: OsvResponse = response
-        .json()
-        .await
-        .map_err(|e| anyhow!("OSV JSON parse failed: {e}"))?;
-
-    let advisories = payload
-        .vulns
-        .unwrap_or_default()
-        .into_iter()
-        .map(|v| map_vuln(&v, &name, version, eco))
-        .collect();
-
-    Ok(OsvQueryResult {
-        package: name,
-        version: version.to_string(),
-        ecosystem: eco.to_string(),
-        advisories,
-        error: None,
-    })
-}
-
-/// Query OSV for many package versions (batch). Failed transport → error;
-/// empty vulns per item is fine.
-///
-/// # Errors
-/// Returns an error if the batch request fails entirely.
-pub async fn query_batch(items: &[(Ecosystem, String, String)]) -> Result<Vec<OsvQueryResult>> {
-    if items.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let client = http_client()?;
-    let queries: Vec<serde_json::Value> = items
-        .iter()
-        .map(|(eco, name, ver)| {
-            let eco_s = osv_ecosystem(*eco);
-            let pkg = osv_package_name(*eco, name);
-            serde_json::json!({
-                "version": ver,
-                "package": { "name": pkg, "ecosystem": eco_s }
-            })
-        })
-        .collect();
-
-    let body = serde_json::json!({ "queries": queries });
-    debug!("OSV querybatch ({} items)", items.len());
-
-    let response = client
-        .post(OSV_BATCH_URL)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| anyhow!("OSV batch request failed: {e}"))?;
-
-    if !response.status().is_success() {
-        return Err(anyhow!("OSV batch returned HTTP {}", response.status()));
-    }
-
-    let payload: OsvBatchResponse = response
-        .json()
-        .await
-        .map_err(|e| anyhow!("OSV batch JSON parse failed: {e}"))?;
-
-    let results_raw = payload.results.unwrap_or_default();
-    let mut out = Vec::with_capacity(items.len());
-
-    for (i, (eco, name, ver)) in items.iter().enumerate() {
-        let eco_s = osv_ecosystem(*eco);
-        let pkg = osv_package_name(*eco, name);
-        let vulns = results_raw
-            .get(i)
-            .and_then(|r| r.vulns.clone())
-            .unwrap_or_default();
-        let advisories = vulns
-            .into_iter()
-            .map(|v| map_vuln(&v, &pkg, ver, eco_s))
-            .collect();
-        out.push(OsvQueryResult {
-            package: pkg,
-            version: ver.clone(),
-            ecosystem: eco_s.to_string(),
-            advisories,
-            error: None,
-        });
-    }
-
-    Ok(out)
-}
-
-fn map_vuln(v: &OsvVuln, package: &str, version: &str, ecosystem: &str) -> OsvAdvisory {
-    let id = v.id.clone().unwrap_or_else(|| "UNKNOWN".to_string());
-    let is_malware = id.starts_with("MAL-")
-        || v.database_specific
-            .as_ref()
-            .and_then(|d| d.get("malicious"))
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-
-    let severity = severity_from_vuln(v, is_malware);
-    let summary = v
-        .summary
-        .clone()
-        .or_else(|| v.details.clone())
-        .unwrap_or_else(|| id.clone())
-        .chars()
-        .take(280)
-        .collect();
-
-    OsvAdvisory {
-        id: id.clone(),
-        summary,
-        severity,
-        is_malware,
-        package: package.to_string(),
-        version: version.to_string(),
-        ecosystem: ecosystem.to_string(),
-        details_url: Some(format!("https://osv.dev/vulnerability/{id}")),
-    }
-}
-
-fn severity_from_vuln(v: &OsvVuln, is_malware: bool) -> String {
+pub(crate) fn map_severity_from_raw(v: &OsvVulnLike, is_malware: bool) -> String {
     if is_malware {
         return "CRITICAL".to_string();
     }
     if let Some(sevs) = &v.severity {
         for s in sevs {
             if let Some(score) = &s.score {
-                // CVSS vector often contains /AV: — try numeric score field variants
                 if let Ok(n) = score.parse::<f64>() {
                     return cvss_label(n);
                 }
@@ -254,7 +137,6 @@ fn severity_from_vuln(v: &OsvVuln, is_malware: bool) -> String {
             }
         }
     }
-    // database_specific severity
     if let Some(ds) = &v.database_specific {
         if let Some(s) = ds.get("severity").and_then(serde_json::Value::as_str) {
             return s.to_uppercase();
@@ -277,35 +159,120 @@ fn cvss_label(score: f64) -> String {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct OsvResponse {
-    vulns: Option<Vec<OsvVuln>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OsvBatchResponse {
-    results: Option<Vec<OsvBatchItem>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OsvBatchItem {
-    vulns: Option<Vec<OsvVuln>>,
+/// API / dump vuln shape used by remote mapping.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct OsvVuln {
+    pub id: Option<String>,
+    pub summary: Option<String>,
+    pub details: Option<String>,
+    pub severity: Option<Vec<OsvSeverity>>,
+    pub database_specific: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct OsvVuln {
-    id: Option<String>,
-    summary: Option<String>,
-    details: Option<String>,
-    severity: Option<Vec<OsvSeverity>>,
-    database_specific: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct OsvSeverity {
+pub(crate) struct OsvSeverity {
     #[serde(rename = "type")]
-    type_: Option<String>,
-    score: Option<String>,
+    pub type_: Option<String>,
+    pub score: Option<String>,
+}
+
+pub(crate) fn map_vuln(v: &OsvVuln, package: &str, version: &str, ecosystem: &str) -> OsvAdvisory {
+    let id = v.id.clone().unwrap_or_else(|| "UNKNOWN".to_string());
+    let is_malware = id.starts_with("MAL-")
+        || v.database_specific
+            .as_ref()
+            .and_then(|d| d.get("malicious"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+
+    let severity = map_severity_from_raw(
+        &OsvVulnLike {
+            severity: v.severity.clone(),
+            database_specific: v.database_specific.clone(),
+        },
+        is_malware,
+    );
+    let summary = v
+        .summary
+        .clone()
+        .or_else(|| v.details.clone())
+        .unwrap_or_else(|| id.clone())
+        .chars()
+        .take(280)
+        .collect();
+
+    OsvAdvisory {
+        id: id.clone(),
+        summary,
+        severity,
+        is_malware,
+        package: package.to_string(),
+        version: version.to_string(),
+        ecosystem: ecosystem.to_string(),
+        details_url: Some(format!("https://osv.dev/vulnerability/{id}")),
+    }
+}
+
+fn local_usable(ecosystem: Ecosystem) -> bool {
+    has_index(ecosystem)
+}
+
+/// Query OSV for a single package version (local dump and/or live API).
+///
+/// # Errors
+/// Returns an error when the selected mode cannot produce a result.
+pub async fn query_package(
+    ecosystem: Ecosystem,
+    package_name: &str,
+    version: &str,
+) -> Result<OsvQueryResult> {
+    match OsvMode::from_env() {
+        OsvMode::Online => remote::query_package(ecosystem, package_name, version).await,
+        OsvMode::Local => local::query_package(ecosystem, package_name, version),
+        OsvMode::Auto => {
+            if local_usable(ecosystem) {
+                match local::query_package(ecosystem, package_name, version) {
+                    Ok(r) => Ok(r),
+                    Err(e) => {
+                        tracing::warn!("Local OSV failed ({e}); falling back to online API");
+                        remote::query_package(ecosystem, package_name, version).await
+                    }
+                }
+            } else {
+                remote::query_package(ecosystem, package_name, version).await
+            }
+        }
+    }
+}
+
+/// Query OSV for many package versions.
+///
+/// # Errors
+/// Returns an error if the configured backend fails entirely.
+pub async fn query_batch(items: &[(Ecosystem, String, String)]) -> Result<Vec<OsvQueryResult>> {
+    if items.is_empty() {
+        return Ok(vec![]);
+    }
+    match OsvMode::from_env() {
+        OsvMode::Online => remote::query_batch(items).await,
+        OsvMode::Local => local::query_batch(items),
+        OsvMode::Auto => {
+            // Use local only when every required ecosystem has an index;
+            // otherwise prefer online for a consistent batch.
+            let all_local = items.iter().all(|(e, _, _)| local_usable(*e));
+            if all_local {
+                match local::query_batch(items) {
+                    Ok(r) => Ok(r),
+                    Err(e) => {
+                        tracing::warn!("Local OSV batch failed ({e}); falling back to online");
+                        remote::query_batch(items).await
+                    }
+                }
+            } else {
+                remote::query_batch(items).await
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -340,5 +307,107 @@ mod tests {
         let a = map_vuln(&v, "pkg", "1.0.0", "npm");
         assert!(a.is_malware);
         assert_eq!(a.severity, "CRITICAL");
+    }
+
+    #[test]
+    fn test_mode_from_env() {
+        std::env::set_var("PKG_GUARD_OSV_MODE", "local");
+        assert_eq!(OsvMode::from_env(), OsvMode::Local);
+        std::env::set_var("PKG_GUARD_OSV_MODE", "online");
+        assert_eq!(OsvMode::from_env(), OsvMode::Online);
+        std::env::set_var("PKG_GUARD_OSV_MODE", "offline");
+        assert_eq!(OsvMode::from_env(), OsvMode::Local);
+        std::env::remove_var("PKG_GUARD_OSV_MODE");
+        assert_eq!(OsvMode::from_env(), OsvMode::Auto);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_query_prefers_local_in_auto() {
+        use local::{
+            clear_memory_cache, save_index, save_meta, EcoMeta, EcosystemIndex, IndexedAdvisory,
+            IndexedRange, OsvMeta,
+        };
+        use std::collections::HashMap;
+
+        let dir = std::env::temp_dir().join(format!("pkg-guard-osv-auto-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("PKG_GUARD_CACHE_DIR", &dir);
+        std::env::set_var("PKG_GUARD_OSV_MODE", "auto");
+        clear_memory_cache();
+
+        let mut index = EcosystemIndex::default();
+        index.packages.insert(
+            "six".into(),
+            vec![IndexedAdvisory {
+                id: "TEST-LOCAL-SIX".into(),
+                summary: "fixture".into(),
+                severity: "LOW".into(),
+                is_malware: false,
+                versions: vec!["1.16.0".into()],
+                ranges: vec![],
+            }],
+        );
+        // also need range-only path
+        index.packages.insert(
+            "range-pkg".into(),
+            vec![IndexedAdvisory {
+                id: "TEST-RANGE".into(),
+                summary: "r".into(),
+                severity: "MEDIUM".into(),
+                is_malware: false,
+                versions: vec![],
+                ranges: vec![IndexedRange {
+                    introduced: "1.0.0".into(),
+                    fixed: None,
+                    last_affected: Some("1.5.0".into()),
+                }],
+            }],
+        );
+        index.advisory_count = 2;
+        index.package_count = 2;
+        save_index("PyPI", &index).unwrap();
+        let mut meta = OsvMeta {
+            updated_at: Some(format!(
+                "unix:{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+            )),
+            ecosystems: HashMap::new(),
+            source: "test".into(),
+        };
+        meta.ecosystems.insert(
+            "PyPI".into(),
+            EcoMeta {
+                advisory_count: 2,
+                package_count: 2,
+                updated_at: meta.updated_at.clone(),
+            },
+        );
+        save_meta(&meta).unwrap();
+
+        let r = query_package(Ecosystem::Python, "six", "1.16.0")
+            .await
+            .unwrap();
+        assert_eq!(r.source.as_deref(), Some("local"));
+        assert_eq!(r.advisories.len(), 1);
+
+        std::env::set_var("PKG_GUARD_OSV_MODE", "local");
+        let r = query_package(Ecosystem::Python, "range-pkg", "1.2.0")
+            .await
+            .unwrap();
+        assert_eq!(r.advisories.len(), 1);
+
+        // local mode missing ecosystem index → error
+        let err = query_package(Ecosystem::Npm, "left-pad", "1.0.0").await;
+        assert!(err.is_err());
+
+        std::env::remove_var("PKG_GUARD_OSV_MODE");
+        std::env::remove_var("PKG_GUARD_CACHE_DIR");
+        clear_memory_cache();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

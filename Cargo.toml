@@ -47,6 +47,9 @@ tokio-stream = "0.1"
 # For reading lines from stdin asynchronously
 tokio-util = { version = "0.7", features = ["codec"] }
 
+# Local OSV dump: unzip ecosystem archives from GCS
+zip = { version = "2", default-features = false, features = ["deflate", "deflate-flate2"] }
+
 [lints.rust]
 unsafe_code = "deny"
 missing_docs = "warn"
