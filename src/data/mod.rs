@@ -1,4 +1,4 @@
-//! Shared data types and blocklist stack (custom → feed → seed)
+//! Shared data types and blocklist stack (custom → feed cache; no embedded denylist)
 
 pub mod blocklist;
 pub mod blocklist_format;
@@ -101,7 +101,7 @@ pub struct TyposquatResult {
     pub is_suspicious: bool,
     /// Whether the package is on the blocklist
     pub is_blocklisted: bool,
-    /// Which blocklist matched: `custom`, `builtin`, or omitted when not blocklisted
+    /// Which blocklist matched: `custom`, `feed`, or omitted when not blocklisted
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocklist_source: Option<String>,
     /// Similar legitimate packages found

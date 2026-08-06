@@ -88,8 +88,7 @@ core: {
 
     custom: "Custom blocklist\n(user/project/env)"
     feed: "Feed cache\n(~/.cache/pkg-guard)"
-    seed: "Seed JSON\n(data/blocklist/seed.json)"
-    popular: "Popular packages\n(data/blocklist/popular.json)"
+    popular: "Popular names only\n(typosquat, not denylist)"
     types: Shared Types
   }
 
@@ -111,7 +110,7 @@ entry.mcp_server -> core.parsers: pin_dependencies\nscan_lockfile
 entry.mcp_server -> core.audit: audit_package
 entry.mcp_server -> core.project: audit_project
 
-core.typosquat -> core.data: "lookup: custom → feed → seed\n+ popular pkgs"
+core.typosquat -> core.data: "lookup: custom → feed\n+ popular pkgs"
 core.audit -> core.typosquat: step 1
 core.audit -> core.registry: step 2
 core.audit -> core.audit.docker_api: step 3

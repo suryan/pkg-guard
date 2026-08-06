@@ -1,8 +1,8 @@
 //! User- and project-maintained custom blocklists.
 //!
 //! These exist so operators can block brand-new threats **immediately**, without
-//! waiting for internet feeds or a pkg-guard release. Custom entries always win
-//! over (and are checked before) the embedded seed list.
+//! waiting for internet feeds. Custom entries always win over (and are checked
+//! before) the feed cache. The binary embeds no denylist.
 //!
 //! ## Load order (all files that exist are **merged**)
 //!

@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "description": "Default remote blocklist feeds for `pkg-guard update-db` when no PKG_GUARD_FEED_URLS / --feed is given. Soft-fail if unreachable. Seed is always merged regardless.",
+  "description": "Default remote feed URLs for update-db (URL list only — package names are NOT embedded in the binary). Enable entries after you host a feed.",
   "feeds": [
     {
-      "name": "pkg-guard-seed-mirror",
-      "url": "https://raw.githubusercontent.com/surya/pkg-guard/master/data/blocklist/seed.json",
+      "name": "example-local-path-hint",
+      "url": "https://example.invalid/pkg-guard/blocklist.json",
       "enabled": false,
-      "note": "Enable after this repository is published to GitHub (currently 404). Until then, update-db writes a seed-only cache, which is correct offline behavior."
+      "note": "Replace with your team feed URL and set enabled=true, or pass --feed / PKG_GUARD_FEED_URLS. Repo ships data/blocklist/example-feed.json as a sample document to host."
     }
   ]
 }

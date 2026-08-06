@@ -175,10 +175,11 @@ pub fn stale_warning() -> Option<String> {
     }
     match cache_age_days() {
         None => Some(format!(
-            "Feed cache missing — run `pkg-guard update-db` (recommended at least every {MAX_CACHE_AGE_DAYS} days)"
+            "Feed cache missing — no name denylist from feeds. Run \
+             `pkg-guard update-db --feed <url>` (refresh at least every {MAX_CACHE_AGE_DAYS} days)"
         )),
         Some(days) => Some(format!(
-            "Feed cache is {days} days old (max {MAX_CACHE_AGE_DAYS}) — run `pkg-guard update-db`"
+            "Feed cache is {days} days old (max {MAX_CACHE_AGE_DAYS}) — run `pkg-guard update-db --feed <url>`"
         )),
     }
 }

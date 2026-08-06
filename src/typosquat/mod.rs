@@ -51,13 +51,6 @@ pub fn check_typosquat(ecosystem: Ecosystem, package_name: &str) -> TyposquatRes
                  (from `pkg-guard update-db`).",
             );
         }
-        BlocklistSource::Builtin => {
-            return blocked_result(
-                "builtin",
-                "BLOCKED — package is on the built-in seed blocklist \
-                 (data/blocklist/seed.json).",
-            );
-        }
         BlocklistSource::None => {}
     }
 
@@ -135,8 +128,19 @@ fn blocked_result(source: &str, recommendation: &str) -> TyposquatResult {
     })
 }
 
-/// Append feed-cache staleness guidance without changing block status.
+/// Append guidance when name blocklists are empty/stale (no embedded seed).
 fn with_stale_note(mut result: TyposquatResult) -> TyposquatResult {
+    use crate::data::blocklist::name_blocklist_empty;
+
+    if name_blocklist_empty() {
+        let note = "No name blocklist loaded (binary has no embedded denylist). \
+                    Run `pkg-guard update-db --feed <url>` and/or `pkg-guard blocklist init`";
+        if !result.recommendation.contains("No name blocklist") {
+            result.recommendation = format!("{}. {note}", result.recommendation);
+        }
+        return result;
+    }
+
     if feed_cache_is_stale() {
         if let Some(note) = feed_cache::stale_warning() {
             if !result.recommendation.contains("update-db") {
@@ -273,10 +277,30 @@ mod tests {
     }
 
     #[test]
-    fn test_blocklisted_package() {
+    fn test_no_embedded_name_blocklist() {
+        // Isolate from any host feed cache / custom list.
+        let dir = std::env::temp_dir().join(format!("pg-empty-bl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::env::set_var("PKG_GUARD_CACHE_DIR", &dir);
+        std::env::set_var(
+            "PKG_GUARD_BLOCKLIST",
+            dir.join("missing-custom.json").as_os_str(),
+        );
+        crate::data::custom_blocklist::reload();
+        crate::data::feed_cache::reload();
+
         let result = check_typosquat(Ecosystem::Npm, "crossenv");
-        assert!(result.is_suspicious);
-        assert!(result.is_blocklisted);
+        assert!(
+            !result.is_blocklisted,
+            "without custom/feed, binary must not block names"
+        );
+
+        std::env::remove_var("PKG_GUARD_CACHE_DIR");
+        std::env::remove_var("PKG_GUARD_BLOCKLIST");
+        crate::data::custom_blocklist::reload();
+        crate::data::feed_cache::reload();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

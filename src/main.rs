@@ -74,10 +74,10 @@ enum Commands {
         #[command(subcommand)]
         action: BlocklistCmd,
     },
-    /// Refresh feed cache from remote feeds + built-in seed
+    /// Refresh feed cache from remote feeds (no embedded denylist in the binary)
     UpdateDb {
-        /// Extra feed URL(s) in blocklist JSON format (repeatable).
-        /// Also reads comma-separated `PKG_GUARD_FEED_URLS`.
+        /// Feed URL(s) in blocklist JSON format (repeatable).
+        /// Also reads comma-separated `PKG_GUARD_FEED_URLS` and enabled default-feeds.json URLs.
         #[arg(long = "feed")]
         feeds: Vec<String>,
     },
@@ -193,9 +193,10 @@ fn run_blocklist_cmd(action: BlocklistCmd) -> anyhow::Result<()> {
 
 fn print_blocklist_status() -> anyhow::Result<()> {
     let snap = data::custom_blocklist::snapshot();
-    let (seed_py, seed_npm, seed_java, seed_cargo) = data::blocklist::seed_entry_counts();
     let status = serde_json::json!({
-        "lookup_order": ["custom", "feed_cache", "seed"],
+        "lookup_order": ["custom", "feed_cache"],
+        "embedded_blocklist": false,
+        "name_blocklist_empty": data::blocklist::name_blocklist_empty(),
         "custom": {
             "candidate_paths": data::custom_blocklist::candidate_paths(),
             "loaded_paths": snap.loaded_paths,
@@ -203,17 +204,12 @@ fn print_blocklist_status() -> anyhow::Result<()> {
             "load_errors": snap.errors,
         },
         "feed_cache": data::feed_cache::status_snapshot(),
-        "seed": {
-            "source": "data/blocklist/seed.json (embedded)",
-            "python": seed_py,
-            "npm": seed_npm,
-            "java": seed_java,
-            "cargo": seed_cargo,
-        },
         "hints": [
-            "Brand-new threats: edit custom list (pkg-guard blocklist init)",
-            "Refresh intel: pkg-guard update-db [--feed URL]",
-            "Custom always wins over feed and seed",
+            "No denylist is embedded in the binary",
+            "Load names: pkg-guard update-db --feed <url>",
+            "Zero-day: pkg-guard blocklist init (custom list)",
+            "Custom always wins over feed cache",
+            "Optional sample feed file in repo: data/blocklist/example-feed.json (not embedded)",
         ],
     });
     println!("{}", serde_json::to_string_pretty(&status)?);

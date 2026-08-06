@@ -119,8 +119,8 @@ fn pin_dependencies_tool() -> ToolDefinition {
 fn scan_lockfile_tool() -> ToolDefinition {
     ToolDefinition {
         name: "scan_lockfile".to_string(),
-        description: "Scan a lock file for known malicious packages (custom/feed/seed blocklists) \
-            and OSV.dev version advisories for resolved dependencies."
+        description: "Scan a lock file for known malicious packages (custom + feed-cache \
+            blocklists; nothing embedded in the binary) and OSV.dev version advisories."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -188,8 +188,8 @@ fn audit_project_tool() -> ToolDefinition {
 fn blocklist_status_tool() -> ToolDefinition {
     ToolDefinition {
         name: "blocklist_status".to_string(),
-        description: "Show blocklist layer status: custom lists, feed cache age/staleness, \
-            and embedded seed counts. Lookup order is custom → feed_cache → seed."
+        description: "Show blocklist layer status: custom lists and feed cache \
+            (no embedded denylist). Lookup order is custom → feed_cache."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -202,8 +202,9 @@ fn blocklist_status_tool() -> ToolDefinition {
 fn update_db_tool() -> ToolDefinition {
     ToolDefinition {
         name: "update_db".to_string(),
-        description: "Refresh the feed cache by merging the built-in seed with remote feeds \
-            (default feeds and/or provided URLs). Writes ~/.cache/pkg-guard/blocklist-cache.json."
+        description: "Refresh the feed cache from remote feed URLs only (no embedded seed). \
+            Requires --feed / feeds[] / PKG_GUARD_FEED_URLS / enabled default-feeds. \
+            Writes ~/.cache/pkg-guard/blocklist-cache.json."
             .to_string(),
         input_schema: json!({
             "type": "object",

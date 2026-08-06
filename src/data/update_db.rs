@@ -1,13 +1,13 @@
-//! `pkg-guard update-db` — refresh the feed cache from remote feeds + seed.
+//! `pkg-guard update-db` — refresh the feed cache from remote feeds only.
 //!
-//! Default feeds can be set via `PKG_GUARD_FEED_URLS` (comma-separated).
-//! Additional URLs can be passed on the CLI. The embedded seed is always merged
-//! so offline seed data remains present even if feeds fail.
+//! No blocklist is baked into the binary. You must supply feed URLs via:
+//! 1. CLI `--feed` / MCP `feeds`
+//! 2. `PKG_GUARD_FEED_URLS` (comma-separated)
+//! 3. Enabled entries in `data/blocklist/default-feeds.json` (URL list only — not package names)
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use tracing::{info, warn};
 
-use super::blocklist::{seed_document, seed_entry_counts};
 use super::blocklist_format::BlocklistDocument;
 use super::feed_cache;
 
@@ -27,20 +27,13 @@ pub struct UpdateDbResult {
     pub message: String,
 }
 
-/// Fetch remote feed URLs (if any), merge with seed, write cache.
-///
-/// Feed resolution order:
-/// 1. Explicit `extra_feeds` (CLI `--feed` / MCP)
-/// 2. `PKG_GUARD_FEED_URLS` (comma-separated)
-/// 3. Built-in defaults from `data/blocklist/default-feeds.json`
+/// Fetch remote feed URLs, merge, write cache. Does **not** embed any seed.
 ///
 /// # Errors
-/// Returns an error only if the cache cannot be written after merge.
+/// - No feed URLs configured
+/// - All feeds failed (existing cache left untouched)
+/// - Cache write failure
 pub async fn update_db(extra_feeds: &[String]) -> Result<UpdateDbResult> {
-    let mut doc = seed_document();
-    let mut feeds_ok = vec!["seed".to_string()];
-    let mut feeds_failed = Vec::new();
-
     let mut urls = env_feed_urls();
     for u in extra_feeds {
         if !u.trim().is_empty() && !urls.contains(u) {
@@ -58,27 +51,46 @@ pub async fn update_db(extra_feeds: &[String]) -> Result<UpdateDbResult> {
     }
 
     if urls.is_empty() {
-        info!("No remote feeds configured; writing seed-only cache");
-    } else {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(45))
-            .user_agent(concat!("pkg-guard/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .context("Failed to create HTTP client for update-db")?;
+        bail!(
+            "No blocklist feeds configured. The binary ships with no embedded denylist.\n\
+             Provide feeds via:\n\
+               --feed https://example.com/blocklist.json\n\
+               PKG_GUARD_FEED_URLS=url1,url2\n\
+               or enable URLs in data/blocklist/default-feeds.json and rebuild.\n\
+             Zero-day names can also go in a custom list: pkg-guard blocklist init"
+        );
+    }
 
-        for url in &urls {
-            match fetch_feed(&client, url).await {
-                Ok(remote) => {
-                    info!("Fetched feed {url} ({} entries)", remote.total_entries());
-                    doc.merge(&remote);
-                    feeds_ok.push(url.clone());
-                }
-                Err(e) => {
-                    warn!("Feed failed {url}: {e}");
-                    feeds_failed.push(format!("{url}: {e}"));
-                }
+    let mut doc = BlocklistDocument::default();
+    let mut feeds_ok = Vec::new();
+    let mut feeds_failed = Vec::new();
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(45))
+        .user_agent(concat!("pkg-guard/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .context("Failed to create HTTP client for update-db")?;
+
+    for url in &urls {
+        match fetch_feed(&client, url).await {
+            Ok(remote) => {
+                info!("Fetched feed {url} ({} entries)", remote.total_entries());
+                doc.merge(&remote);
+                feeds_ok.push(url.clone());
+            }
+            Err(e) => {
+                warn!("Feed failed {url}: {e}");
+                feeds_failed.push(format!("{url}: {e}"));
             }
         }
+    }
+
+    if feeds_ok.is_empty() {
+        bail!(
+            "All {} feed(s) failed; leaving existing cache unchanged. Failures: {}",
+            feeds_failed.len(),
+            feeds_failed.join("; ")
+        );
     }
 
     doc.normalize();
@@ -86,36 +98,25 @@ pub async fn update_db(extra_feeds: &[String]) -> Result<UpdateDbResult> {
     doc.updated_at = Some(utc_now_iso());
     doc.sources.clone_from(&feeds_ok);
     doc.description = Some(
-        "pkg-guard feed cache — merged seed + remote feeds. \
-         Custom lists are separate and always take priority."
+        "pkg-guard feed cache — remote feeds only (no embedded seed in the binary). \
+         Custom lists always take priority over this cache."
             .to_string(),
     );
 
     let path = feed_cache::write_cache(&doc)?;
-    let (seed_py, seed_npm, seed_java, seed_cargo) = seed_entry_counts();
 
-    let message = if feeds_failed.is_empty() && urls.is_empty() {
+    let message = if feeds_failed.is_empty() {
         format!(
-            "Wrote seed-only cache ({} packages). Configure PKG_GUARD_FEED_URLS or pass --feed for remote intel.",
-            doc.total_entries()
-        )
-    } else if feeds_failed.is_empty() {
-        format!(
-            "Updated feed cache with {} packages from {} source(s).",
+            "Updated feed cache with {} packages from {} feed(s).",
             doc.total_entries(),
             feeds_ok.len()
         )
-    } else if feeds_ok.len() > 1 {
-        format!(
-            "Updated feed cache with partial success ({} packages). {} feed(s) failed.",
-            doc.total_entries(),
-            feeds_failed.len()
-        )
     } else {
         format!(
-            "All remote feeds failed; wrote seed-only cache ({} packages). \
-             seed py/npm/java/cargo={seed_py}/{seed_npm}/{seed_java}/{seed_cargo}",
-            doc.total_entries()
+            "Updated feed cache with partial success ({} packages from {} feed(s); {} failed).",
+            doc.total_entries(),
+            feeds_ok.len(),
+            feeds_failed.len()
         )
     };
 
@@ -144,7 +145,7 @@ fn env_feed_urls() -> Vec<String> {
         .collect()
 }
 
-/// Built-in default feeds (embedded). Soft-failed at fetch time if unreachable.
+/// Default feed **URLs** only (not package names). Embedded config, not a denylist.
 const DEFAULT_FEEDS_JSON: &str = include_str!("../../data/blocklist/default-feeds.json");
 
 #[derive(Debug, serde::Deserialize)]
@@ -204,7 +205,6 @@ fn utc_now_iso() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // Unix timestamp string — file mtime is used for age; this is audit metadata.
     format!("unix:{secs}")
 }
 
@@ -216,5 +216,11 @@ mod tests {
     fn test_utc_now_iso_shape() {
         let s = utc_now_iso();
         assert!(s.starts_with("unix:"));
+    }
+
+    #[test]
+    fn test_default_feeds_parse() {
+        // File may have all feeds disabled — still must parse.
+        let _ = default_feed_urls();
     }
 }

@@ -152,34 +152,11 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | cargo run --
 
 5. **Add tests**
 
-## Blocklist data (seed vs custom vs feeds)
+## Blocklist data (no denylist in the binary)
 
-### Seed (compiled into the binary)
+**Name denylists are never compiled into `pkg-guard`.** Supply them via custom files and/or remote feeds.
 
-Edit the JSON under `data/blocklist/` (not Rust source):
-
-```bash
-# Malicious / known-bad names
-data/blocklist/seed.json
-
-# Popular packages for typosquat similarity
-data/blocklist/popular.json
-```
-
-Format (same as custom/feed documents):
-
-```json
-{
-  "version": 1,
-  "python": ["new-malicious-package"],
-  "npm": [],
-  "java": []
-}
-```
-
-Then rebuild: `cargo build --release` (seed is embedded via `include_str!`).
-
-### Custom lists (no rebuild — brand-new threats)
+### Custom lists (zero-day)
 
 ```bash
 pkg-guard blocklist init
@@ -190,13 +167,18 @@ pkg-guard blocklist reload   # optional; mtime auto-reload for MCP
 ### Feed cache (`update-db`)
 
 ```bash
-pkg-guard update-db
+# Host data/blocklist/example-feed.json (or your own) somewhere
 pkg-guard update-db --feed https://example.com/blocklist.json
 # or: PKG_GUARD_FEED_URLS=url1,url2 pkg-guard update-db
 ```
 
 Writes `~/.cache/pkg-guard/blocklist-cache.json` (override with `PKG_GUARD_CACHE_DIR`).
-Lookup order: **custom → feed cache → seed**.
+Lookup order: **custom → feed cache**.
+
+### Popular packages (typosquat only — not a denylist)
+
+Edit `data/blocklist/popular.json` and rebuild. Used only for similarity checks
+against legitimate package names.
 
 ## Environment Variables
 
@@ -242,7 +224,7 @@ cross build --release --target aarch64-apple-darwin
 | Rust over Python | Single binary, no runtime deps, memory safety for security tooling |
 | bollard over docker CLI | No subprocess shelling, better error handling, typed API |
 | reqwest + rustls | No OpenSSL dependency, simpler cross-compilation |
-| Seed JSON embedded at build | Offline default; intel updates via custom + feed cache without rebuild |
+| No denylist in the binary | Name intel only from custom + feed cache; popular.json is typosquat-only |
 | LazyLock over once_cell | Standard library (Rust 1.80+), no extra dependency |
 | Simple XML parsing | Avoids xml crate dependency for pom.xml, keeps binary small |
 | strsim crate | Battle-tested string similarity algorithms |

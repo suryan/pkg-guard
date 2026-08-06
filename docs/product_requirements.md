@@ -45,13 +45,13 @@ These attacks succeed because there is no automated gate between "developer type
 
 | ID | Requirement |
 |----|-------------|
-| FR-2.1 | Maintain an embedded **seed** blocklist (data files under `data/blocklist/`) |
-| FR-2.2 | Check packages against blocklist before any installation |
-| FR-2.3 | Support layered updates: seed (rebuild), feed cache (`update-db`), custom (user file) |
-| FR-2.4 | Cover all three ecosystems (Python, npm, Java) |
-| FR-2.5 | Include known hijacked package names in the seed (e.g. crossenv, flatmap-stream) |
-| FR-2.6 | Custom lists checked before feed and seed for zero-day response |
-| FR-2.7 | Feed cache staleness warning when missing or older than 7 days |
+| FR-2.1 | **No name denylist embedded in the binary** |
+| FR-2.2 | Check packages against loaded blocklists before any installation |
+| FR-2.3 | Support layered lists: feed cache (`update-db`) + custom (user/project/env) |
+| FR-2.4 | Cover Python, npm, Java, and Cargo ecosystems |
+| FR-2.5 | Provide optional example feed document for operators to host |
+| FR-2.6 | Custom lists checked before feed cache for zero-day response |
+| FR-2.7 | Warn when no name blocklist is loaded or feed cache is stale (>7 days) |
 
 ### FR-3: Container Auditing
 

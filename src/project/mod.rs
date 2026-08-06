@@ -290,12 +290,25 @@ mod tests {
         writeln!(f, "flask").expect("write");
         writeln!(f, "reqeusts==1.0.0").expect("write");
 
+        // Name blocklists are not embedded — load a custom list for this test.
+        let bl = dir.join("custom-blocklist.json");
+        fs::write(
+            &bl,
+            r#"{"python":["reqeusts"],"npm":[],"java":[],"cargo":[]}"#,
+        )
+        .expect("write blocklist");
+        // SAFETY: single-threaded test process for env var isolation
+        std::env::set_var("PKG_GUARD_BLOCKLIST", &bl);
+        crate::data::custom_blocklist::reload();
+
         let result = audit_project(dir.to_str().expect("utf8")).expect("audit");
         assert!(result.files_scanned >= 1);
         assert!(result.total_unpinned >= 1);
         assert!(result.total_malicious >= 1);
         assert_eq!(result.status, "CRITICAL");
 
+        std::env::remove_var("PKG_GUARD_BLOCKLIST");
+        crate::data::custom_blocklist::reload();
         let _ = fs::remove_dir_all(&dir);
     }
 

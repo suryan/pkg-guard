@@ -116,21 +116,22 @@ Container security posture:
 
 | Module | Role |
 |--------|------|
-| `blocklist.rs` | Lookup order + seed load (`include_str!` of `data/blocklist/seed.json`) |
-| `blocklist_format.rs` | Shared JSON document shape for seed / feeds / custom |
+| `blocklist.rs` | Lookup order (custom → feed); popular names for typosquat only |
+| `blocklist_format.rs` | Shared JSON document shape for feeds / custom |
 | `custom_blocklist.rs` | User/project/env custom lists (highest priority) |
 | `feed_cache.rs` | Runtime cache from `update-db` (`~/.cache/pkg-guard/`) |
-| `update_db.rs` | Fetch remote feeds (defaults + env/CLI), merge with seed, write cache |
+| `update_db.rs` | Fetch remote feeds (env/CLI/default URLs), write cache |
 | `mod.rs` | Shared types: Ecosystem, AuditResult, TyposquatResult, … |
 
-**Lookup order:** custom → feed cache → built-in seed.
+**Lookup order:** custom → feed cache. **No name denylist is embedded in the binary.**
 
 ### `src/osv/` — Version advisories
 
 Queries [OSV.dev](https://osv.dev) (`/v1/query`, `/v1/querybatch`) for CVE / `MAL-*`
 hits on exact package versions during `audit` and `scan`.
 
-Seed data lives under `data/blocklist/` in the repo and is **embedded at compile time** so the binary still works offline. Feeds and custom lists are **not** in source; they update without a rebuild.
+`data/blocklist/example-feed.json` is an optional sample feed to host yourself.
+`popular.json` is embedded for typosquat similarity only (legitimate names).
 
 ## Data Flow
 

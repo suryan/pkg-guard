@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Built-in seed blocklist (compiled into pkg-guard). Prefer custom lists and update-db feeds for fresh intel.",
+  "description": "Example name-blocklist feed (NOT embedded in the binary). Host this URL and pass to update-db --feed, or copy packages into a custom blocklist.",
   "python": [
     "reqeusts",
     "requsets",
@@ -141,5 +141,8 @@
     "bytecode-viewer",
     "org.webjars.npm:malicious-package-example"
   ],
-  "cargo": []
+  "cargo": [],
+  "sources": [
+    "example-feed"
+  ]
 }

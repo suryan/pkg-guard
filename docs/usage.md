@@ -23,11 +23,12 @@ pkg-guard --help
 
 ## Blocklist layers
 
-Lookup order (first match wins):
+**No name denylist is embedded in the binary.** Lookup order (first match wins):
 
-1. **Custom** — operator-maintained (zero-day, no rebuild)  
-2. **Feed cache** — from `pkg-guard update-db` (`~/.cache/pkg-guard/blocklist-cache.json`)  
-3. **Seed** — embedded from `data/blocklist/seed.json` (offline default)
+1. **Custom** — operator-maintained (zero-day)  
+2. **Feed cache** — from `pkg-guard update-db` (`~/.cache/pkg-guard/blocklist-cache.json`)
+
+Until you load a feed and/or custom list, name blocklisting is empty (OSV version checks still work when online).
 
 ### Custom lists (fast response to new threats)
 
@@ -62,23 +63,15 @@ Long-lived `pkg-guard serve` (MCP) **auto-reloads** custom files on mtime change
 ### Feed cache (`update-db`)
 
 ```bash
-# Seed-only refresh (always works offline)
-pkg-guard update-db
-
-# Merge remote feeds (JSON in the same schema as custom/seed)
-pkg-guard update-db --feed https://example.com/team-blocklist.json
+# Required: at least one feed URL (sample document in repo: data/blocklist/example-feed.json)
+pkg-guard update-db --feed https://your-host/blocklist.json
 # or: export PKG_GUARD_FEED_URLS=https://a.json,https://b.json
 
-pkg-guard blocklist status   # shows cache path, age, stale flag
+pkg-guard blocklist status   # shows cache path, age, empty flag
 ```
 
-If the cache is missing or older than **7 days**, `check` / audit recommendations
-include a reminder to run `update-db`.
-
-Default remote feeds are listed in `data/blocklist/default-feeds.json` (embedded).
-The GitHub seed mirror is **disabled until the repo is public** (would 404 otherwise);
-`update-db` still always writes a seed-only cache. Enable that feed or set
-`PKG_GUARD_FEED_URLS` / `--feed` for remote intel. Unreachable feeds soft-fail.
+If no feed/custom list is loaded, `check` warns that the name blocklist is empty.
+If the feed cache is older than **7 days**, recommendations remind you to refresh.
 
 ### OSV.dev version advisories
 

@@ -923,18 +923,34 @@ mod tests {
     }
 
     #[test]
-    fn test_scan_requirements_blocklist() {
-        let content = "requests==2.31.0\ncrossenv==1.0.0\nflask==3.0.0\n";
-        let findings = scan_requirements_as_lockfile(content);
-        assert_eq!(findings.len(), 0);
-    }
+    fn test_scan_requirements_with_custom_blocklist() {
+        let dir = std::env::temp_dir().join(format!("pg-scan-bl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let bl = dir.join("bl.json");
+        std::fs::write(
+            &bl,
+            r#"{"python":["reqeusts"],"npm":[],"java":[],"cargo":[]}"#,
+        )
+        .expect("write");
+        std::env::set_var("PKG_GUARD_BLOCKLIST", &bl);
+        std::env::set_var("PKG_GUARD_CACHE_DIR", &dir);
+        crate::data::custom_blocklist::reload();
+        crate::data::feed_cache::reload();
 
-    #[test]
-    fn test_scan_requirements_malicious() {
         let content = "reqeusts==1.0.0\nflask==3.0.0\n";
         let findings = scan_requirements_as_lockfile(content);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].package, "reqeusts");
+
+        let clean = "requests==2.31.0\nflask==3.0.0\n";
+        assert!(scan_requirements_as_lockfile(clean).is_empty());
+
+        std::env::remove_var("PKG_GUARD_BLOCKLIST");
+        std::env::remove_var("PKG_GUARD_CACHE_DIR");
+        crate::data::custom_blocklist::reload();
+        crate::data::feed_cache::reload();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -44,8 +44,7 @@ pkg-guard project -p .
 pkg-guard blocklist init              # scaffold ~/.config/pkg-guard/blocklist.json
 pkg-guard blocklist status
 
-# Refresh feed cache (seed + optional remote feeds)
-pkg-guard update-db
+# Load name blocklist from a remote feed (nothing embedded in the binary)
 pkg-guard update-db --feed https://example.com/blocklist.json
 
 # Start as MCP server (for IDE integration)
@@ -54,9 +53,11 @@ pkg-guard serve
 
 ## Blocklist layers
 
-**Order:** custom → feed cache (`update-db`) → seed (`data/blocklist/seed.json`)
+**The binary embeds no name denylist.** Names come only from lists you load:
 
-### Custom (zero-day, no rebuild)
+**Order:** custom → feed cache (`update-db`)
+
+### Custom (zero-day)
 
 | Path | Scope |
 |------|--------|
@@ -70,13 +71,12 @@ pkg-guard blocklist init
 pkg-guard blocklist status
 ```
 
-### Feed cache
+### Feed cache (required for shared name lists)
 
 ```bash
-pkg-guard update-db
-# Uses default feeds from data/blocklist/default-feeds.json when no URLs given
-pkg-guard update-db --feed https://example.com/blocklist.json
-# PKG_GUARD_FEED_URLS=url1,url2
+# Host data/blocklist/example-feed.json (or your own) and load it:
+pkg-guard update-db --feed https://your-host/blocklist.json
+# or: PKG_GUARD_FEED_URLS=url1,url2
 ```
 
 Cache: `~/.cache/pkg-guard/blocklist-cache.json` (override with `PKG_GUARD_CACHE_DIR`).
@@ -86,9 +86,11 @@ Cache: `~/.cache/pkg-guard/blocklist-cache.json` (override with `PKG_GUARD_CACHE
 `audit` and `scan` query [OSV.dev](https://osv.dev) for the resolved package version
 (CVEs and `MAL-*` malware IDs). Malware / CRITICAL / HIGH → BLOCK; other hits → WARN.
 
-### Seed (repo data, embedded at build)
+### What *is* embedded
 
-Edit `data/blocklist/seed.json` / `popular.json` and rebuild.
+- `data/blocklist/popular.json` — **legitimate** package names for typosquat similarity only (not a denylist)
+- `data/blocklist/default-feeds.json` — optional default **feed URLs** (enable your own hosts)
+- `data/blocklist/example-feed.json` — sample denylist document to **host yourself** (not compiled in)
 
 ## MCP Integration
 
@@ -151,7 +153,7 @@ src/
 ├── audit/           # Container audit orchestrator (bollard)
 ├── project/         # Whole-repo manifest + lockfile scanner
 └── data/            # Blocklist stack + shared types
-data/blocklist/      # seed.json + popular.json (Phase 1 data files)
+data/blocklist/      # popular.json (typosquat); example-feed.json (host yourself)
 ```
 
 ## License

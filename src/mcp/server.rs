@@ -261,9 +261,10 @@ fn handle_audit_project(args: &Value) -> ToolCallResult {
 
 fn handle_blocklist_status() -> ToolCallResult {
     let snap = data::custom_blocklist::snapshot();
-    let (seed_py, seed_npm, seed_java, seed_cargo) = data::blocklist::seed_entry_counts();
     let status = serde_json::json!({
-        "lookup_order": ["custom", "feed_cache", "seed"],
+        "lookup_order": ["custom", "feed_cache"],
+        "embedded_blocklist": false,
+        "name_blocklist_empty": data::blocklist::name_blocklist_empty(),
         "custom": {
             "candidate_paths": data::custom_blocklist::candidate_paths(),
             "loaded_paths": snap.loaded_paths,
@@ -271,15 +272,13 @@ fn handle_blocklist_status() -> ToolCallResult {
             "load_errors": snap.errors,
         },
         "feed_cache": data::feed_cache::status_snapshot(),
-        "seed": {
-            "source": "data/blocklist/seed.json (embedded)",
-            "python": seed_py,
-            "npm": seed_npm,
-            "java": seed_java,
-            "cargo": seed_cargo,
-        },
-        "default_feeds": "data/blocklist/default-feeds.json (used by update_db when no feeds given)",
+        "default_feeds": "data/blocklist/default-feeds.json (URL list only; enable + host feeds yourself)",
         "osv": "OSV.dev version advisories used by audit_package and scan_lockfile",
+        "hints": [
+            "No denylist is embedded in the binary",
+            "update_db --feed <url> to load name blocklists",
+            "blocklist init for zero-day custom names",
+        ],
     });
     match serde_json::to_string_pretty(&status) {
         Ok(json) => ToolCallResult::text(json),

@@ -52,11 +52,10 @@ pub async fn audit_package(
         let source = typosquat_result
             .blocklist_source
             .as_deref()
-            .unwrap_or("builtin");
+            .unwrap_or("feed");
         let warning = match source {
             "custom" => "Package is on your custom blocklist (user/project/env)".to_string(),
-            "feed" => "Package is on the feed cache blocklist (pkg-guard update-db)".to_string(),
-            _ => "Package is on the built-in seed blocklist".to_string(),
+            _ => "Package is on the feed cache blocklist (pkg-guard update-db)".to_string(),
         };
         return Ok(AuditResult {
             status: AuditStatus::Blocked,
