@@ -80,6 +80,13 @@ cargo test
 # Run a specific test
 cargo test test_typosquat_detected
 
+# Coverage (required by precommit; default min 35% lines)
+cargo install cargo-llvm-cov --locked   # once
+rustup component add llvm-tools-preview # once
+cargo llvm-cov --summary-only --fail-under-lines 35
+cargo llvm-cov --html --output-dir target/llvm-cov   # HTML report
+# Override threshold: PKG_GUARD_MIN_COVERAGE=40 bash scripts/precommit.sh
+
 # Run with verbose output
 RUST_LOG=debug cargo run -- check -e python -p reqeusts
 ```
@@ -98,6 +105,9 @@ cargo test
 cargo test typosquat
 cargo test parsers
 cargo test audit
+
+# Coverage summary (same tool as precommit step 4)
+cargo llvm-cov --summary-only
 ```
 
 ### Manual Testing
