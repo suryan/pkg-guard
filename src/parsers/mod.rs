@@ -60,9 +60,6 @@ pub fn pin_dependencies(
     }
 }
 
-/// Max packages queried against OSV per scan (keeps live API load bounded).
-const OSV_PACKAGE_CAP: usize = 80;
-
 /// Scan a lock file for known malicious packages.
 ///
 /// # Errors
@@ -103,11 +100,12 @@ pub fn scan_lockfile(file_path: &str) -> Result<ScanResult> {
         0,
         None,
         None,
-        None,
     ))
 }
 
 /// Scan a lock file against the blocklist **and** OSV version advisories.
+///
+/// Every resolved package is checked (no package-count cap).
 ///
 /// # Errors
 /// Returns an error if the file cannot be read or has an unsupported format.
@@ -120,13 +118,9 @@ pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
 
     let osv_mode = crate::osv::OsvMode::from_env();
     result.osv_mode = Some(osv_mode.as_str().to_string());
+    result.packages_osv_checked = packages.len();
 
-    // Cap load for large lockfiles (local index is cheap; live API is not)
-    let capped: Vec<_> = packages.into_iter().take(OSV_PACKAGE_CAP).collect();
-    result.packages_osv_checked = capped.len();
-    result.packages_osv_cap = Some(OSV_PACKAGE_CAP);
-
-    if capped.is_empty() {
+    if packages.is_empty() {
         result.osv_backend = Some("none".into());
         result.status = compose_scan_status(
             result.findings_count,
@@ -134,13 +128,12 @@ pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
             &result.osv_findings,
             result.packages_total,
             result.packages_osv_checked,
-            result.packages_osv_cap,
             result.osv_backend.as_deref(),
         );
         return Ok(result);
     }
 
-    match crate::osv::query_batch(&capped).await {
+    match crate::osv::query_batch(&packages).await {
         Ok(batch) => {
             let backend = batch
                 .first()
@@ -161,7 +154,6 @@ pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
                 &result.osv_findings,
                 result.packages_total,
                 result.packages_osv_checked,
-                result.packages_osv_cap,
                 result.osv_backend.as_deref(),
             );
         }
@@ -175,7 +167,6 @@ pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
                     &[],
                     result.packages_total,
                     result.packages_osv_checked,
-                    result.packages_osv_cap,
                     result.osv_backend.as_deref(),
                 )
             );

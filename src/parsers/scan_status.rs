@@ -9,7 +9,6 @@ pub(crate) fn build_scan_result(
     osv_findings: Vec<crate::osv::OsvAdvisory>,
     packages_total: usize,
     packages_osv_checked: usize,
-    packages_osv_cap: Option<usize>,
     osv_mode: Option<String>,
     osv_backend: Option<String>,
 ) -> ScanResult {
@@ -21,7 +20,6 @@ pub(crate) fn build_scan_result(
         &osv_findings,
         packages_total,
         packages_osv_checked,
-        packages_osv_cap,
         osv_backend.as_deref(),
     );
     ScanResult {
@@ -29,7 +27,6 @@ pub(crate) fn build_scan_result(
         packages_total,
         packages_blocklist_checked: packages_total,
         packages_osv_checked,
-        packages_osv_cap,
         osv_mode,
         osv_backend,
         malicious_findings: findings,
@@ -46,15 +43,9 @@ pub(crate) fn compose_scan_status(
     osv: &[crate::osv::OsvAdvisory],
     packages_total: usize,
     packages_osv_checked: usize,
-    packages_osv_cap: Option<usize>,
     osv_backend: Option<&str>,
 ) -> String {
-    let scope = format_scan_scope(
-        packages_total,
-        packages_osv_checked,
-        packages_osv_cap,
-        osv_backend,
-    );
+    let scope = format_scan_scope(packages_total, packages_osv_checked, osv_backend);
     let malware = osv.iter().filter(|a| a.is_malware).count();
     if blocklist_count > 0 || malware > 0 {
         format!(
@@ -70,7 +61,6 @@ pub(crate) fn compose_scan_status(
 pub(crate) fn format_scan_scope(
     packages_total: usize,
     packages_osv_checked: usize,
-    packages_osv_cap: Option<usize>,
     osv_backend: Option<&str>,
 ) -> String {
     let backend = match osv_backend {
@@ -86,12 +76,6 @@ pub(crate) fn format_scan_scope(
     }
     if packages_osv_checked == 0 {
         return format!("scanned {packages_total} package(s) (blocklist only; {backend})");
-    }
-    if packages_osv_checked < packages_total {
-        let cap = packages_osv_cap.unwrap_or(packages_osv_checked);
-        return format!(
-            "scanned {packages_total} package(s), OSV-checked {packages_osv_checked} (cap {cap}, {backend})"
-        );
     }
     format!("scanned {packages_total} package(s), OSV-checked {packages_osv_checked} ({backend})")
 }

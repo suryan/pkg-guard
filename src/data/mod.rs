@@ -206,12 +206,9 @@ pub struct ScanResult {
     /// Packages checked against name blocklists (custom + feed)
     #[serde(default)]
     pub packages_blocklist_checked: usize,
-    /// Packages queried against OSV (may be capped below `packages_total`)
+    /// Packages queried against OSV (same as `packages_total` when OSV runs)
     #[serde(default)]
     pub packages_osv_checked: usize,
-    /// Max packages sent to OSV in one scan (0 if OSV not run)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub packages_osv_cap: Option<usize>,
     /// Configured lookup mode: `auto`, `local`, or `online` (`PKG_GUARD_OSV_MODE`)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub osv_mode: Option<String>,

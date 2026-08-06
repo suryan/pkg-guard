@@ -138,7 +138,7 @@ pkg-guard audit -e python -p jinja2 -v 2.4.1
 # → osv.advisories[] / osv_findings; source may be "local" or "online"
 ```
 
-`scan` batch is capped (e.g. first 80 packages) when using the live API path.
+Every resolved package in the lockfile is OSV-checked (no package-count cap). Large online scans may take longer; prefer a local dump (`osv update`) for big trees.
 
 MCP: `osv_status`, `osv_update` (optional `ecosystems: string[]`), plus `blocklist_status`, `update_db` (`feeds`, optional `osv: true`).
 
@@ -262,16 +262,16 @@ Example output:
   "file": "Cargo.lock",
   "packages_total": 225,
   "packages_blocklist_checked": 225,
-  "packages_osv_checked": 80,
-  "packages_osv_cap": 80,
+  "packages_osv_checked": 225,
+  "osv_mode": "auto",
+  "osv_backend": "local",
   "findings_count": 0,
   "osv_count": 0,
-  "status": "CLEAN — scanned 225 package(s), OSV-checked 80 (cap 80); no known malicious packages or OSV advisories found"
+  "status": "CLEAN — scanned 225 package(s), OSV-checked 225 (OSV=local dump); no known malicious packages or OSV advisories found"
 }
 ```
 
-`packages_total` is how many deps were found in the lockfile. OSV is capped (default 80) so large repos stay fast; blocklist still covers all packages.
-
+`packages_total` / `packages_osv_checked` are how many deps were found and OSV-checked (all of them). `osv_backend` is `local` (disk dump) or `online` (api.osv.dev).
 ### Full Package Audit (Requires Docker)
 
 ```bash
