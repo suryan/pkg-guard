@@ -1,5 +1,5 @@
-use super::*;
 use super::scan_status::format_scan_scope;
+use super::*;
 
 #[test]
 fn test_parse_requirements_pinned() {
