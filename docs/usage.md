@@ -98,6 +98,7 @@ If the feed cache is older than **7 days**, recommendations remind you to refres
 
 ```bash
 # Download per-ecosystem zips and build indexes under ~/.cache/pkg-guard/osv/
+# Progress (size / % / speed) prints on stderr while downloading.
 pkg-guard osv update
 # or subset: pkg-guard osv update -e cargo
 # or:        make osv-update ECOSYSTEMS=cargo,python

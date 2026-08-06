@@ -1,8 +1,8 @@
 //! Download OSV ecosystem dumps and build local package indexes.
 
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
-use std::time::Instant;
+use std::io::{Cursor, Read, Write};
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
@@ -80,12 +80,25 @@ pub async fn update_osv(ecosystems: &[Ecosystem]) -> Result<OsvUpdateResult> {
         source: dump_base(),
     };
 
-    for eco in &ecos {
+    let total_steps = ecos.len();
+    eprintln!(
+        "pkg-guard osv update: {} ecosystem(s) → {}",
+        total_steps,
+        super::local::osv_dir().display()
+    );
+
+    for (i, eco) in ecos.iter().enumerate() {
         let osv_name = osv_ecosystem(*eco);
+        let step = i + 1;
+        eprintln!("[{step}/{total_steps}] {osv_name}");
         match update_one(&client, osv_name).await {
             Ok(index) => {
                 info!(
                     "OSV index {osv_name}: {} advisories across {} packages",
+                    index.advisory_count, index.package_count
+                );
+                eprintln!(
+                    "  ✓ indexed {} advisories / {} packages",
                     index.advisory_count, index.package_count
                 );
                 rows.push(EcoUpdateRow {
@@ -106,6 +119,7 @@ pub async fn update_osv(ecosystems: &[Ecosystem]) -> Result<OsvUpdateResult> {
             }
             Err(e) => {
                 warn!("OSV update failed for {osv_name}: {e}");
+                eprintln!("  ✗ failed: {e}");
                 rows.push(EcoUpdateRow {
                     ecosystem: osv_name.to_string(),
                     advisory_count: 0,
@@ -150,27 +164,107 @@ async fn update_one(client: &reqwest::Client, osv_eco: &str) -> Result<Ecosystem
     info!("Downloading OSV dump {url}");
     let started = Instant::now();
 
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| anyhow!("download failed: {e}"))?;
-    if !response.status().is_success() {
-        return Err(anyhow!("HTTP {} for {url}", response.status()));
-    }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| anyhow!("read body: {e}"))?;
+    let bytes = download_with_progress(client, &url, osv_eco).await?;
     info!(
         "Downloaded {osv_eco} dump ({} bytes) in {:.1}s",
         bytes.len(),
         started.elapsed().as_secs_f64()
     );
 
+    eprint!("  indexing {osv_eco}…");
+    let _ = std::io::stderr().flush();
+    let index_started = Instant::now();
     let index = build_index_from_zip(osv_eco, &bytes)?;
+    eprintln!(" done in {:.1}s", index_started.elapsed().as_secs_f64());
     save_index(osv_eco, &index)?;
     Ok(index)
+}
+
+/// Stream a URL into memory, printing download progress on stderr.
+async fn download_with_progress(
+    client: &reqwest::Client,
+    url: &str,
+    label: &str,
+) -> Result<Vec<u8>> {
+    let mut response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| anyhow!("download failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(anyhow!("HTTP {} for {url}", response.status()));
+    }
+
+    let total = response.content_length();
+    let mut buf: Vec<u8> = match total.and_then(|n| usize::try_from(n).ok()) {
+        Some(n) => Vec::with_capacity(n),
+        None => Vec::with_capacity(1024 * 1024),
+    };
+    let mut downloaded: u64 = 0;
+    let mut last_report = Instant::now()
+        .checked_sub(Duration::from_secs(1))
+        .unwrap_or_else(Instant::now);
+    let started = Instant::now();
+
+    // Use Response::chunk so we can report progress without the "stream" feature.
+    loop {
+        let chunk = response
+            .chunk()
+            .await
+            .map_err(|e| anyhow!("read body: {e}"))?;
+        let Some(chunk) = chunk else {
+            break;
+        };
+        downloaded = downloaded.saturating_add(chunk.len() as u64);
+        buf.extend_from_slice(&chunk);
+
+        // Throttle redraws (~5/s) so huge dumps don't flood I/O
+        if last_report.elapsed() >= Duration::from_millis(200) {
+            print_download_progress(label, downloaded, total, started.elapsed());
+            last_report = Instant::now();
+        }
+    }
+    print_download_progress(label, downloaded, total, started.elapsed());
+    eprintln!(); // finish the \r line
+    Ok(buf)
+}
+
+fn print_download_progress(label: &str, downloaded: u64, total: Option<u64>, elapsed: Duration) {
+    let secs = elapsed.as_secs().max(1);
+    let speed = downloaded / secs;
+    let msg = match total {
+        Some(t) if t > 0 => {
+            let pct = downloaded.saturating_mul(100) / t;
+            format!(
+                "  downloading {label}: {} / {} ({pct:3}%)  {}/s",
+                format_bytes(downloaded),
+                format_bytes(t),
+                format_bytes(speed),
+            )
+        }
+        _ => format!(
+            "  downloading {label}: {}  {}/s",
+            format_bytes(downloaded),
+            format_bytes(speed),
+        ),
+    };
+    eprint!("\r{msg:<72}");
+    let _ = std::io::stderr().flush();
+}
+
+fn format_bytes(n: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    if n >= GB {
+        format!("{}.{:02} GB", n / GB, (n % GB) * 100 / GB)
+    } else if n >= MB {
+        format!("{}.{} MB", n / MB, (n % MB) * 10 / MB)
+    } else if n >= KB {
+        format!("{} KB", n / KB)
+    } else {
+        format!("{n} B")
+    }
 }
 
 /// Build [`EcosystemIndex`] from an OSV ecosystem `all.zip` bytes.
