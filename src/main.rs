@@ -7,6 +7,7 @@ mod audit;
 mod data;
 mod mcp;
 mod parsers;
+mod project;
 mod registry;
 mod typosquat;
 
@@ -61,6 +62,12 @@ enum Commands {
         #[arg(short, long)]
         file: String,
     },
+    /// Audit an entire project tree (manifests + lockfiles)
+    Project {
+        /// Project root directory (default: current directory)
+        #[arg(short, long, default_value = ".")]
+        path: String,
+    },
 }
 
 #[tokio::main]
@@ -98,6 +105,10 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Scan { file } => {
             let result = parsers::scan_lockfile(&file)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Commands::Project { path } => {
+            let result = project::audit_project(&path)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }

@@ -207,3 +207,50 @@ pub struct MaliciousFinding {
     /// Reason for flagging
     pub reason: String,
 }
+
+/// Kind of project file discovered during a project-wide audit
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectFileKind {
+    /// Dependency manifest (requirements.txt, package.json, pom.xml, …)
+    Manifest,
+    /// Lock file (package-lock.json, yarn.lock, …)
+    Lockfile,
+}
+
+/// Per-file result inside a project audit
+#[derive(Debug, Serialize)]
+pub struct ProjectFileResult {
+    /// Path relative to the project root
+    pub path: String,
+    /// Manifest vs lockfile
+    pub kind: ProjectFileKind,
+    /// Pin analysis (manifests)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pin: Option<PinResult>,
+    /// Blocklist scan (lockfiles and requirements blocklist pass)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan: Option<ScanResult>,
+    /// Error if this file could not be analyzed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Aggregate result of scanning an entire project tree
+#[derive(Debug, Serialize)]
+pub struct ProjectAuditResult {
+    /// Absolute (or best-effort) project path
+    pub project_path: String,
+    /// Number of supported files analyzed
+    pub files_scanned: usize,
+    /// Total unpinned dependency declarations across manifests
+    pub total_unpinned: usize,
+    /// Total malicious findings across lock/dep files
+    pub total_malicious: usize,
+    /// Overall status: CLEAN | WARNING | CRITICAL | EMPTY
+    pub status: String,
+    /// Human-readable recommendation
+    pub recommendation: String,
+    /// Per-file results
+    pub files: Vec<ProjectFileResult>,
+}

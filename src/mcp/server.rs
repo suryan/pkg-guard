@@ -10,7 +10,7 @@ use super::protocol::{
     ToolCallResult, ToolsCapability, ToolsListResult,
 };
 use super::tools::get_tool_definitions;
-use crate::{audit, data, parsers, registry, typosquat};
+use crate::{audit, data, parsers, project, registry, typosquat};
 
 const SERVER_NAME: &str = "pkg-guard";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -113,6 +113,7 @@ async fn handle_tool_call(params: &Value) -> ToolCallResult {
         "pin_dependencies" => handle_pin_dependencies(&arguments),
         "scan_lockfile" => handle_scan_lockfile(&arguments),
         "get_package_metadata" => handle_get_package_metadata(&arguments).await,
+        "audit_project" => handle_audit_project(&arguments),
         _ => ToolCallResult::error(format!("Unknown tool: {tool_name}")),
     }
 }
@@ -238,5 +239,20 @@ async fn handle_get_package_metadata(args: &Value) -> ToolCallResult {
             ToolCallResult::text(json)
         }
         Err(e) => ToolCallResult::error(format!("Failed to fetch metadata: {e}")),
+    }
+}
+
+fn handle_audit_project(args: &Value) -> ToolCallResult {
+    let project_path = args
+        .get("project_path")
+        .and_then(Value::as_str)
+        .unwrap_or(".");
+
+    match project::audit_project(project_path) {
+        Ok(result) => {
+            let json = serde_json::to_string_pretty(&result).unwrap_or_default();
+            ToolCallResult::text(json)
+        }
+        Err(e) => ToolCallResult::error(format!("Project audit failed: {e}")),
     }
 }

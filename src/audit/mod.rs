@@ -166,6 +166,7 @@ async fn run_audit_if_needed(
         version,
         check_network,
         check_filesystem,
+        check_processes,
     )
     .await
     {
@@ -188,6 +189,17 @@ async fn run_audit_if_needed(
     }
 }
 
+/// Elevate status only toward higher severity: Pass < Warning < Blocked < Failed.
+fn elevate(current: AuditStatus, next: AuditStatus) -> AuditStatus {
+    use AuditStatus::{Blocked, Failed, Pass, Warning};
+    match (current, next) {
+        (Failed, _) | (_, Failed) => Failed,
+        (Blocked, _) | (_, Blocked) => Blocked,
+        (Warning, _) | (_, Warning) => Warning,
+        (Pass, Pass) => Pass,
+    }
+}
+
 fn determine_status(
     typosquat_result: &crate::data::TyposquatResult,
     container_audit: Option<&ContainerAuditResult>,
@@ -195,35 +207,71 @@ fn determine_status(
 ) -> AuditStatus {
     let mut status = AuditStatus::Pass;
 
+    // Install-time scripts already added as warnings → WARN (not block by default)
+    if !warnings.is_empty() {
+        status = elevate(status, AuditStatus::Warning);
+    }
+
     if typosquat_result.is_suspicious {
         warnings.push(format!(
             "Typosquat warning: similar to {:?}",
             typosquat_result.similar_to
         ));
-        status = AuditStatus::Warning;
+        status = elevate(status, AuditStatus::Warning);
     }
 
     if let Some(audit) = container_audit {
+        // Network / process abuse are hard blocks
         if audit.suspicious_activity.network {
             warnings.push("Suspicious network activity detected during installation".to_string());
-            status = AuditStatus::Blocked;
-        }
-        if audit.suspicious_activity.filesystem {
-            warnings
-                .push("Suspicious filesystem activity detected during installation".to_string());
-            status = AuditStatus::Blocked;
+            status = elevate(status, AuditStatus::Blocked);
         }
         if audit.suspicious_activity.processes {
             warnings.push("Suspicious process spawning detected during installation".to_string());
-            status = AuditStatus::Blocked;
+            status = elevate(status, AuditStatus::Blocked);
+        }
+        // Filesystem noise is a review warning unless findings look critical
+        if audit.suspicious_activity.filesystem {
+            let critical = audit
+                .filesystem_findings
+                .iter()
+                .any(|f| is_critical_fs_finding(f));
+            if critical {
+                warnings.push(
+                    "Critical filesystem writes detected during installation (e.g. ssh/cron)"
+                        .to_string(),
+                );
+                status = elevate(status, AuditStatus::Blocked);
+            } else {
+                warnings.push(format!(
+                    "Unexpected filesystem activity during installation: {}",
+                    audit.filesystem_findings.join("; ")
+                ));
+                status = elevate(status, AuditStatus::Warning);
+            }
         }
         if !audit.install_success && audit.error.is_none() {
             warnings.push("Package failed to install in isolated environment".to_string());
-            status = AuditStatus::Warning;
+            status = elevate(status, AuditStatus::Warning);
+        }
+        if audit.error.is_some() {
+            status = elevate(status, AuditStatus::Warning);
         }
     }
 
     status
+}
+
+/// Paths that indicate real compromise rather than package-manager noise.
+fn is_critical_fs_finding(finding: &str) -> bool {
+    let lower = finding.to_lowercase();
+    lower.contains("/.ssh")
+        || lower.contains("authorized_keys")
+        || lower.contains("crontab")
+        || lower.contains("/etc/passwd")
+        || lower.contains("/etc/shadow")
+        || lower.contains("/etc/sudoers")
+        || lower.contains("/var/spool/cron")
 }
 
 /// Run the container-based audit using Docker.
@@ -233,6 +281,7 @@ async fn run_container_audit(
     version: &str,
     check_network: bool,
     check_filesystem: bool,
+    check_processes: bool,
 ) -> Result<ContainerAuditResult> {
     let docker = Docker::connect_with_local_defaults()
         .map_err(|e| anyhow!("Cannot connect to Docker: {e}. Is Docker running?"))?;
@@ -247,7 +296,12 @@ async fn run_container_audit(
     info!("Pulling image: {image}");
     pull_image(&docker, &image).await?;
 
-    let audit_script = build_audit_script(&install_cmd, check_network, check_filesystem);
+    let audit_script = build_audit_script(
+        &install_cmd,
+        check_network,
+        check_filesystem,
+        check_processes,
+    );
     let container_name = format!(
         "pkg-guard-{ecosystem}-{}-{}",
         package_name.replace(['/', ':', '@'], "-"),
@@ -376,10 +430,36 @@ mvn dependency:resolve -q"
 }
 
 /// Build the shell script that runs inside the container.
-fn build_audit_script(install_cmd: &str, check_network: bool, check_filesystem: bool) -> String {
+///
+/// Uses a **sentinel file** touched before install so mtime comparisons are
+/// stable. Does **not** flag the whole of `/root` (npm/pip write caches there).
+/// Pure POSIX shell — no python/node dependency inside the audit image.
+fn build_audit_script(
+    install_cmd: &str,
+    check_network: bool,
+    check_filesystem: bool,
+    check_processes: bool,
+) -> String {
     format!(
         r#"#!/bin/sh
 set -u
+
+# Build a JSON string array from newline-separated paths/lines (POSIX).
+json_string_array() {{
+    printf '['
+    first=1
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "$line" ] && continue
+        esc=$(printf '%s' "$line" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        if [ "$first" -eq 1 ]; then
+            first=0
+        else
+            printf ','
+        fi
+        printf '"%s"' "$esc"
+    done
+    printf ']'
+}}
 
 INSTALL_EXIT=0
 SUSPICIOUS_NET=false
@@ -389,36 +469,38 @@ NET_FINDINGS="[]"
 FS_FINDINGS="[]"
 PROC_FINDINGS="[]"
 
+# Stable mtime anchor — never use /install (its mtime moves during install)
+touch /tmp/pkg-guard-sentinel
+mkdir -p /install
+
 INSTALL_OUTPUT=$({install_cmd} 2>&1) || INSTALL_EXIT=$?
 
 if [ "{check_network}" = "true" ]; then
-    SUSPICIOUS_URLS=$(echo "$INSTALL_OUTPUT" | grep -iE '(pastebin|ngrok|burp|interact\.sh|oast|dnslog|requestbin)' | head -5)
+    SUSPICIOUS_URLS=$(echo "$INSTALL_OUTPUT" | grep -iE '(pastebin|ngrok|burp|interact\.sh|oast|dnslog|requestbin)' | head -5 || true)
     if [ -n "$SUSPICIOUS_URLS" ]; then
         SUSPICIOUS_NET=true
-        NET_FINDINGS='["Suspicious URLs found in install output"]'
+        NET_FINDINGS=$(printf '%s\n' "$SUSPICIOUS_URLS" | json_string_array)
     fi
 fi
 
 if [ "{check_filesystem}" = "true" ]; then
-    SENSITIVE_WRITES=""
-    for dir in /etc /root /var/spool/cron; do
-        if [ -d "$dir" ]; then
-            RECENT=$(find "$dir" -newer /install -type f 2>/dev/null | head -5)
-            if [ -n "$RECENT" ]; then
-                SENSITIVE_WRITES="$SENSITIVE_WRITES $RECENT"
-            fi
-        fi
-    done
-    if [ -n "$SENSITIVE_WRITES" ]; then
+    # High-signal paths only. Do not scan all of /root (npm/pip caches).
+    CANDIDATES=$(find /etc /var/spool/cron /root/.ssh \
+        -newer /tmp/pkg-guard-sentinel -type f 2>/dev/null \
+        | grep -Ev '(/etc/ld\.so\.cache|/etc/ssl/certs/|/etc/ca-certificates|/etc/resolv\.conf)' \
+        | head -20 || true)
+    if [ -n "$CANDIDATES" ]; then
         SUSPICIOUS_FS=true
-        FS_FINDINGS='["Writes detected to sensitive system paths"]'
+        FS_FINDINGS=$(printf '%s\n' "$CANDIDATES" | json_string_array)
     fi
 fi
 
-PROC_PATTERNS=$(echo "$INSTALL_OUTPUT" | grep -iE '(reverse.?shell|nc -e|bash -i|/dev/tcp|xmrig|stratum\+tcp|cryptonight)' | head -3)
-if [ -n "$PROC_PATTERNS" ]; then
-    SUSPICIOUS_PROC=true
-    PROC_FINDINGS='["Suspicious process patterns detected in install output"]'
+if [ "{check_processes}" = "true" ]; then
+    PROC_PATTERNS=$(echo "$INSTALL_OUTPUT" | grep -iE '(reverse.?shell|nc -e|bash -i|/dev/tcp|xmrig|stratum\+tcp|cryptonight)' | head -3 || true)
+    if [ -n "$PROC_PATTERNS" ]; then
+        SUSPICIOUS_PROC=true
+        PROC_FINDINGS='["Suspicious process patterns detected in install output"]'
+    fi
 fi
 
 cat << RESULTEOF
@@ -654,5 +736,103 @@ Downloading files...
         assert!(cmd.contains("com.google.guava"));
         assert!(cmd.contains("guava"));
         assert!(cmd.contains("32.1.3-jre"));
+    }
+
+    #[test]
+    fn test_build_audit_script_uses_sentinel_not_install_mtime() {
+        let script = build_audit_script("echo hi", true, true, true);
+        assert!(script.contains("/tmp/pkg-guard-sentinel"));
+        assert!(script.contains("-newer /tmp/pkg-guard-sentinel"));
+        assert!(!script.contains("-newer /install"));
+        // Do not scan entire /root (npm cache false positives)
+        assert!(!script.contains("find /etc /root "));
+        assert!(script.contains("/root/.ssh"));
+    }
+
+    #[test]
+    fn test_is_critical_fs_finding() {
+        assert!(is_critical_fs_finding("/root/.ssh/authorized_keys"));
+        assert!(is_critical_fs_finding("/var/spool/cron/crontabs/root"));
+        assert!(!is_critical_fs_finding("/etc/hosts"));
+        assert!(!is_critical_fs_finding("/etc/ssl/certs/ca.pem"));
+    }
+
+    #[test]
+    fn test_determine_status_fs_is_warn_not_block() {
+        let typosquat = crate::data::TyposquatResult {
+            is_suspicious: false,
+            is_blocklisted: false,
+            similar_to: vec![],
+            min_levenshtein_distance: Some(0),
+            recommendation: "ok".to_string(),
+        };
+        let audit = ContainerAuditResult {
+            install_success: true,
+            suspicious_activity: SuspiciousActivity {
+                network: false,
+                filesystem: true,
+                processes: false,
+            },
+            network_findings: vec![],
+            filesystem_findings: vec!["/etc/hosts".to_string()],
+            process_findings: vec![],
+            error: None,
+        };
+        let mut warnings = Vec::new();
+        let status = determine_status(&typosquat, Some(&audit), &mut warnings);
+        assert!(matches!(status, AuditStatus::Warning));
+        assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn test_determine_status_critical_fs_is_block() {
+        let typosquat = crate::data::TyposquatResult {
+            is_suspicious: false,
+            is_blocklisted: false,
+            similar_to: vec![],
+            min_levenshtein_distance: Some(0),
+            recommendation: "ok".to_string(),
+        };
+        let audit = ContainerAuditResult {
+            install_success: true,
+            suspicious_activity: SuspiciousActivity {
+                network: false,
+                filesystem: true,
+                processes: false,
+            },
+            network_findings: vec![],
+            filesystem_findings: vec!["/root/.ssh/authorized_keys".to_string()],
+            process_findings: vec![],
+            error: None,
+        };
+        let mut warnings = Vec::new();
+        let status = determine_status(&typosquat, Some(&audit), &mut warnings);
+        assert!(matches!(status, AuditStatus::Blocked));
+    }
+
+    #[test]
+    fn test_determine_status_network_is_block() {
+        let typosquat = crate::data::TyposquatResult {
+            is_suspicious: false,
+            is_blocklisted: false,
+            similar_to: vec![],
+            min_levenshtein_distance: Some(0),
+            recommendation: "ok".to_string(),
+        };
+        let audit = ContainerAuditResult {
+            install_success: true,
+            suspicious_activity: SuspiciousActivity {
+                network: true,
+                filesystem: false,
+                processes: false,
+            },
+            network_findings: vec!["pastebin.com".to_string()],
+            process_findings: vec![],
+            filesystem_findings: vec![],
+            error: None,
+        };
+        let mut warnings = Vec::new();
+        let status = determine_status(&typosquat, Some(&audit), &mut warnings);
+        assert!(matches!(status, AuditStatus::Blocked));
     }
 }

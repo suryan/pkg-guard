@@ -14,10 +14,13 @@ use tracing::debug;
 use crate::data::Ecosystem;
 
 /// Shared HTTP client — reuse across requests.
+///
+/// Maven Central search is occasionally slow (>15s); keep a generous timeout.
 fn http_client() -> Result<Client> {
     Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .user_agent("pkg-guard/0.1.0")
+        .timeout(std::time::Duration::from_secs(45))
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .user_agent(concat!("pkg-guard/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| anyhow!("Failed to create HTTP client: {e}"))
 }
@@ -213,10 +216,47 @@ struct MavenResponseBody {
 struct MavenDoc {
     g: Option<String>,
     a: Option<String>,
+    /// Present on latest-version search results.
     latest_version: Option<String>,
+    /// Present on version-specific search results (`v=...`).
+    v: Option<String>,
     p: Option<String>,
     timestamp: Option<u64>,
     version_count: Option<u64>,
+}
+
+/// URL-encode a Solr query token (group, artifact, version).
+fn encode_solr_token(s: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(char::from(b));
+            }
+            // Version tokens may contain '+' which must be encoded.
+            _ => {
+                let _ = write!(out, "%{b:02X}");
+            }
+        }
+    }
+    out
+}
+
+fn build_maven_search_url(group_id: &str, artifact_id: &str, version: Option<&str>) -> String {
+    let g = encode_solr_token(group_id);
+    let a = encode_solr_token(artifact_id);
+    match version {
+        Some(v) => {
+            let v = encode_solr_token(v);
+            format!(
+                "https://search.maven.org/solrsearch/select?q=g:{g}+AND+a:{a}+AND+v:{v}&rows=1&wt=json"
+            )
+        }
+        None => {
+            format!("https://search.maven.org/solrsearch/select?q=g:{g}+AND+a:{a}&rows=1&wt=json")
+        }
+    }
 }
 
 async fn fetch_maven(package_name: &str, version: Option<&str>) -> Result<Value> {
@@ -232,21 +272,41 @@ async fn fetch_maven(package_name: &str, version: Option<&str>) -> Result<Value>
     }
     let (group_id, artifact_id) = (parts[0], parts[1]);
 
-    let url = if let Some(v) = version {
-        format!(
-            "https://search.maven.org/solrsearch/select?q=g:{group_id}+AND+a:{artifact_id}+AND+v:{v}&rows=1&wt=json"
-        )
-    } else {
-        format!(
-            "https://search.maven.org/solrsearch/select?q=g:{group_id}+AND+a:{artifact_id}&rows=1&wt=json"
-        )
-    };
+    match fetch_maven_solr(&client, package_name, group_id, artifact_id, version).await {
+        Ok(value) => Ok(value),
+        Err(solr_err) => {
+            debug!("Maven Solr search failed ({solr_err}); trying repo1 fallback");
+            if let Some(v) = version {
+                fetch_maven_repo1_fallback(&client, package_name, group_id, artifact_id, v).await
+            } else {
+                Err(solr_err)
+            }
+        }
+    }
+}
 
+async fn fetch_maven_solr(
+    client: &Client,
+    package_name: &str,
+    group_id: &str,
+    artifact_id: &str,
+    version: Option<&str>,
+) -> Result<Value> {
+    let url = build_maven_search_url(group_id, artifact_id, version);
     debug!("Fetching Maven Central metadata: {url}");
 
-    let response = client.get(&url).send().await?;
-    let response = response.error_for_status()?;
-    let data: MavenSearchResponse = response.json().await?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| anyhow!("Maven Central request failed for '{package_name}': {e}"))?;
+    let response = response
+        .error_for_status()
+        .map_err(|e| anyhow!("Maven Central returned an error for '{package_name}': {e}"))?;
+    let data: MavenSearchResponse = response
+        .json()
+        .await
+        .map_err(|e| anyhow!("Failed to parse Maven Central response for '{package_name}': {e}"))?;
 
     if data.response.num_found == 0 || data.response.docs.is_empty() {
         return Ok(serde_json::json!({
@@ -256,15 +316,98 @@ async fn fetch_maven(package_name: &str, version: Option<&str>) -> Result<Value>
     }
 
     let doc = &data.response.docs[0];
+    // Version-specific docs use `v`; latest-search docs use `latestVersion`.
+    let resolved_version = doc
+        .v
+        .clone()
+        .or_else(|| doc.latest_version.clone())
+        .or_else(|| version.map(ToString::to_string));
 
     Ok(serde_json::json!({
         "exists": true,
         "registry": "maven_central",
         "group_id": doc.g,
         "artifact_id": doc.a,
+        "version": resolved_version,
         "latest_version": doc.latest_version,
         "packaging": doc.p,
         "timestamp": doc.timestamp,
         "version_count": doc.version_count,
     }))
+}
+
+/// Fallback when Solr is unreachable: HEAD the artifact POM on repo1.
+async fn fetch_maven_repo1_fallback(
+    client: &Client,
+    package_name: &str,
+    group_id: &str,
+    artifact_id: &str,
+    version: &str,
+) -> Result<Value> {
+    let group_path = group_id.replace('.', "/");
+    let url = format!(
+        "https://repo1.maven.org/maven2/{group_path}/{artifact_id}/{version}/{artifact_id}-{version}.pom"
+    );
+    debug!("Maven repo1 fallback HEAD: {url}");
+
+    let response = client
+        .head(&url)
+        .send()
+        .await
+        .map_err(|e| anyhow!("Maven repo1 fallback failed for '{package_name}': {e}"))?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(serde_json::json!({
+            "exists": false,
+            "error": format!(
+                "Package '{package_name}' version '{version}' not found on Maven Central"
+            )
+        }));
+    }
+
+    if !response.status().is_success() {
+        return Err(anyhow!(
+            "Maven repo1 fallback returned {} for '{package_name}'",
+            response.status()
+        ));
+    }
+
+    Ok(serde_json::json!({
+        "exists": true,
+        "registry": "maven_central_repo1",
+        "group_id": group_id,
+        "artifact_id": artifact_id,
+        "version": version,
+        "pom_url": url,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encode_solr_token_encodes_plus_in_version() {
+        let encoded = encode_solr_token("32.1.3-jre");
+        assert_eq!(encoded, "32.1.3-jre");
+        let with_plus = encode_solr_token("1.0+scala");
+        assert!(with_plus.contains("%2B"), "plus should be percent-encoded");
+        assert!(!with_plus.contains('+'));
+    }
+
+    #[test]
+    fn test_build_maven_search_url_versioned() {
+        let url = build_maven_search_url("com.google.guava", "guava", Some("32.1.3-jre"));
+        assert!(url.contains("g:com.google.guava"));
+        assert!(url.contains("a:guava"));
+        assert!(url.contains("v:32.1.3-jre"));
+        assert!(url.contains("search.maven.org"));
+    }
+
+    #[test]
+    fn test_build_maven_search_url_latest() {
+        let url = build_maven_search_url("org.springframework", "spring-core", None);
+        assert!(url.contains("g:org.springframework"));
+        assert!(!url.contains("AND+v:"));
+    }
 }

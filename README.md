@@ -36,6 +36,10 @@ pkg-guard audit -e npm -p express -v 4.18.2
 pkg-guard scan -f package-lock.json
 # → CLEAN — no known malicious packages found
 
+# Audit an entire project tree (manifests + lockfiles)
+pkg-guard project -p .
+# → WARNING/CRITICAL/CLEAN summary across the repo
+
 # Start as MCP server (for IDE integration)
 pkg-guard serve
 ```
@@ -68,6 +72,7 @@ The `audit_package` tool is intentionally not auto-approved since it launches Do
 | `pin_dependencies` | Scan dependency files for unpinned versions |
 | `scan_lockfile` | Check lock files against malicious package blocklist |
 | `get_package_metadata` | Fetch registry metadata without installing |
+| `audit_project` | Scan an entire project tree for pins + malicious packages |
 
 ## Supported Ecosystems
 
@@ -95,6 +100,7 @@ src/
 ├── registry/        # PyPI, npm, Maven Central clients
 ├── parsers/         # Dependency file parsers
 ├── audit/           # Container audit orchestrator (bollard)
+├── project/         # Whole-repo manifest + lockfile scanner
 └── data/            # Embedded blocklists & shared types
 ```
 

@@ -11,6 +11,7 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
         pin_dependencies_tool(),
         scan_lockfile_tool(),
         get_package_metadata_tool(),
+        audit_project_tool(),
     ]
 }
 
@@ -157,6 +158,27 @@ fn get_package_metadata_tool() -> ToolDefinition {
                 }
             },
             "required": ["ecosystem", "package_name"]
+        }),
+    }
+}
+
+fn audit_project_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "audit_project".to_string(),
+        description: "Scan an entire project directory for dependency pinning issues and \
+            known-malicious packages. Discovers requirements.txt, package.json, pom.xml, \
+            build.gradle, package-lock.json, yarn.lock, Pipfile.lock, and similar files."
+            .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "project_path": {
+                    "type": "string",
+                    "description": "Path to the project root directory (default: current directory)",
+                    "default": "."
+                }
+            },
+            "required": []
         }),
     }
 }
