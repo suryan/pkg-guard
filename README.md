@@ -159,9 +159,18 @@ The `audit_package` tool is intentionally not auto-approved since it launches Do
 ## Development checks
 
 ```bash
-# Full gate: line counts, fmt, clippy, tests + ≥90% line coverage, Cargo.lock dogfood
-bash scripts/precommit.sh
+make help          # list targets
+make precommit     # full gate: fmt, clippy, tests, ≥90% coverage, dogfood
+make release       # optimized binary → target/release/pkg-guard
+make install       # install to ~/.local/bin
+make test          # cargo test
+make coverage      # line coverage summary
+make osv-update    # download local OSV dumps (ECOSYSTEMS=cargo optional)
+make scan          # scan FILE=Cargo.lock
+make dogfood       # scan this repo's Cargo.lock
 ```
+
+Or: `bash scripts/precommit.sh`
 
 Coverage is measured with `cargo llvm-cov` on library modules (`main.rs` excluded). Override the floor with `PKG_GUARD_MIN_COVERAGE` only for local experiments.
 

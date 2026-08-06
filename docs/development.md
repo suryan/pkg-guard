@@ -89,6 +89,9 @@ cargo llvm-cov --html --output-dir target/llvm-cov   # HTML report
 
 # Full precommit gate (what CI / commit hygiene should run)
 bash scripts/precommit.sh
+# same via make:
+make precommit
+make help          # build, test, install, osv-update, scan, …
 
 # Run with verbose output
 RUST_LOG=debug cargo run -- check -e python -p reqeusts

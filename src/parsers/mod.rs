@@ -57,6 +57,9 @@ pub fn pin_dependencies(
     }
 }
 
+/// Max packages queried against OSV per scan (keeps live API load bounded).
+const OSV_PACKAGE_CAP: usize = 80;
+
 /// Scan a lock file for known malicious packages.
 ///
 /// # Errors
@@ -87,7 +90,16 @@ pub fn scan_lockfile(file_path: &str) -> Result<ScanResult> {
         ));
     };
 
-    Ok(build_scan_result(file_path.to_string(), findings, vec![]))
+    // Prefer structured extract for totals; fall back to blocklist-scan entry counts where needed.
+    let packages_total = count_packages_in_lockfile(file_path, filename, &content);
+    Ok(build_scan_result(
+        file_path.to_string(),
+        findings,
+        vec![],
+        packages_total,
+        0,
+        None,
+    ))
 }
 
 /// Scan a lock file against the blocklist **and** OSV version advisories.
@@ -97,9 +109,24 @@ pub fn scan_lockfile(file_path: &str) -> Result<ScanResult> {
 pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
     let mut result = scan_lockfile(file_path)?;
     let packages = extract_resolved_packages(file_path)?;
-    // Cap network load for large lockfiles
-    let capped: Vec<_> = packages.into_iter().take(80).collect();
+    let packages_total = packages.len().max(result.packages_total);
+    result.packages_total = packages_total;
+    result.packages_blocklist_checked = packages_total.max(result.packages_blocklist_checked);
+
+    // Cap load for large lockfiles (local index is cheap; live API is not)
+    let capped: Vec<_> = packages.into_iter().take(OSV_PACKAGE_CAP).collect();
+    result.packages_osv_checked = capped.len();
+    result.packages_osv_cap = Some(OSV_PACKAGE_CAP);
+
     if capped.is_empty() {
+        result.status = compose_scan_status(
+            result.findings_count,
+            result.osv_count,
+            &result.osv_findings,
+            result.packages_total,
+            result.packages_osv_checked,
+            result.packages_osv_cap,
+        );
         return Ok(result);
     }
 
@@ -117,12 +144,22 @@ pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
                 result.findings_count,
                 result.osv_count,
                 &result.osv_findings,
+                result.packages_total,
+                result.packages_osv_checked,
+                result.packages_osv_cap,
             );
         }
         Err(e) => {
             result.status = format!(
                 "{}; OSV lookup failed: {e}",
-                compose_scan_status(result.findings_count, 0, &[])
+                compose_scan_status(
+                    result.findings_count,
+                    0,
+                    &[],
+                    result.packages_total,
+                    result.packages_osv_checked,
+                    result.packages_osv_cap,
+                )
             );
         }
     }
@@ -130,16 +167,53 @@ pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
     Ok(result)
 }
 
+fn count_packages_in_lockfile(file_path: &str, filename: &str, content: &str) -> usize {
+    if let Ok(pkgs) = extract_resolved_packages(file_path) {
+        if !pkgs.is_empty() {
+            return pkgs.len();
+        }
+    }
+    // yarn.lock: extract is empty today — count top-level entries instead
+    if filename == "yarn.lock" {
+        return content
+            .lines()
+            .filter(|l| {
+                let t = l.trim();
+                !t.is_empty()
+                    && !t.starts_with('#')
+                    && !t.starts_with([' ', '\t'])
+                    && t.contains('@')
+                    && t.ends_with(':')
+            })
+            .count();
+    }
+    0
+}
+
 fn build_scan_result(
     file: String,
     findings: Vec<MaliciousFinding>,
     osv_findings: Vec<crate::osv::OsvAdvisory>,
+    packages_total: usize,
+    packages_osv_checked: usize,
+    packages_osv_cap: Option<usize>,
 ) -> ScanResult {
     let findings_count = findings.len();
     let osv_count = osv_findings.len();
-    let status = compose_scan_status(findings_count, osv_count, &osv_findings);
+    let status = compose_scan_status(
+        findings_count,
+        osv_count,
+        &osv_findings,
+        packages_total,
+        packages_osv_checked,
+        packages_osv_cap,
+    );
     ScanResult {
         file,
+        packages_total,
+        packages_blocklist_checked: packages_total,
+        packages_osv_checked,
+        packages_osv_cap,
         malicious_findings: findings,
         osv_findings,
         findings_count,
@@ -152,17 +226,41 @@ fn compose_scan_status(
     blocklist_count: usize,
     osv_count: usize,
     osv: &[crate::osv::OsvAdvisory],
+    packages_total: usize,
+    packages_osv_checked: usize,
+    packages_osv_cap: Option<usize>,
 ) -> String {
+    let scope = format_scan_scope(packages_total, packages_osv_checked, packages_osv_cap);
     let malware = osv.iter().filter(|a| a.is_malware).count();
     if blocklist_count > 0 || malware > 0 {
         format!(
-            "CRITICAL — {blocklist_count} blocklist hit(s), {malware} OSV malware, {osv_count} total OSV advisory(ies)"
+            "CRITICAL — {scope}; {blocklist_count} blocklist hit(s), {malware} OSV malware, {osv_count} total OSV advisory(ies)"
         )
     } else if osv_count > 0 {
-        format!("WARNING — {osv_count} OSV advisory(ies) for resolved versions")
+        format!("WARNING — {scope}; {osv_count} OSV advisory(ies) for resolved versions")
     } else {
-        "CLEAN — no known malicious packages or OSV advisories found".to_string()
+        format!("CLEAN — {scope}; no known malicious packages or OSV advisories found")
     }
+}
+
+fn format_scan_scope(
+    packages_total: usize,
+    packages_osv_checked: usize,
+    packages_osv_cap: Option<usize>,
+) -> String {
+    if packages_total == 0 {
+        return "scanned 0 packages".to_string();
+    }
+    if packages_osv_checked == 0 {
+        return format!("scanned {packages_total} package(s) (blocklist only; no OSV query)");
+    }
+    if packages_osv_checked < packages_total {
+        let cap = packages_osv_cap.unwrap_or(packages_osv_checked);
+        return format!(
+            "scanned {packages_total} package(s), OSV-checked {packages_osv_checked} (cap {cap})"
+        );
+    }
+    format!("scanned {packages_total} package(s), OSV-checked {packages_osv_checked}")
 }
 
 /// Extract (ecosystem, name, version) triples from a lock/requirements file.
@@ -888,100 +986,4 @@ fn extract_quoted_string(line: &str) -> Option<&str> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_requirements_pinned() {
-        let content = "requests==2.31.0\nflask==3.0.0\n";
-        let result = parse_requirements(content, "requirements.txt", false, false);
-        assert_eq!(result.pinned_count, 2);
-        assert_eq!(result.unpinned_count, 0);
-    }
-
-    #[test]
-    fn test_parse_requirements_unpinned() {
-        let content = "requests>=2.0\nflask\nnumpy~=1.24\n";
-        let result = parse_requirements(content, "requirements.txt", false, false);
-        assert_eq!(result.unpinned_count, 3);
-    }
-
-    #[test]
-    fn test_parse_package_json_mixed() {
-        let content = r#"{
-            "dependencies": {
-                "express": "4.18.2",
-                "lodash": "^4.17.21"
-            },
-            "devDependencies": {
-                "jest": "~29.7.0"
-            }
-        }"#;
-        let result = parse_package_json(content, "package.json", false).expect("should parse");
-        assert_eq!(result.pinned_count, 1);
-        assert_eq!(result.unpinned_count, 2);
-    }
-
-    #[test]
-    fn test_scan_requirements_with_custom_blocklist() {
-        let dir = std::env::temp_dir().join(format!("pg-scan-bl-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let bl = dir.join("bl.json");
-        std::fs::write(
-            &bl,
-            r#"{"python":["reqeusts"],"npm":[],"java":[],"cargo":[]}"#,
-        )
-        .expect("write");
-        std::env::set_var("PKG_GUARD_BLOCKLIST", &bl);
-        std::env::set_var("PKG_GUARD_CACHE_DIR", &dir);
-        crate::data::custom_blocklist::reload();
-        crate::data::feed_cache::reload();
-
-        let content = "reqeusts==1.0.0\nflask==3.0.0\n";
-        let findings = scan_requirements_as_lockfile(content);
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].package, "reqeusts");
-
-        let clean = "requests==2.31.0\nflask==3.0.0\n";
-        assert!(scan_requirements_as_lockfile(clean).is_empty());
-
-        std::env::remove_var("PKG_GUARD_BLOCKLIST");
-        std::env::remove_var("PKG_GUARD_CACHE_DIR");
-        crate::data::custom_blocklist::reload();
-        crate::data::feed_cache::reload();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_parse_cargo_lock_entries() {
-        let content = r#"
-[[package]]
-name = "serde"
-version = "1.0.200"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-
-[[package]]
-name = "tokio"
-version = "1.40.0"
-"#;
-        let entries = parse_cargo_lock_entries(content);
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].0, "serde");
-        assert_eq!(entries[0].1, "1.0.200");
-        assert_eq!(entries[1].0, "tokio");
-    }
-
-    #[test]
-    fn test_extract_xml_value() {
-        assert_eq!(
-            extract_xml_value("<artifactId>spring-core</artifactId>", "artifactId"),
-            Some("spring-core".to_string())
-        );
-        assert_eq!(
-            extract_xml_value("<version>5.3.20</version>", "version"),
-            Some("5.3.20".to_string())
-        );
-        assert_eq!(extract_xml_value("<other>val</other>", "version"), None);
-    }
-}
+mod tests;

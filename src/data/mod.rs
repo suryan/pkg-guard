@@ -200,6 +200,18 @@ pub struct PinnedDep {
 pub struct ScanResult {
     /// Path to the file scanned
     pub file: String,
+    /// Packages with name+version extracted from the lockfile
+    #[serde(default)]
+    pub packages_total: usize,
+    /// Packages checked against name blocklists (custom + feed)
+    #[serde(default)]
+    pub packages_blocklist_checked: usize,
+    /// Packages queried against OSV (may be capped below `packages_total`)
+    #[serde(default)]
+    pub packages_osv_checked: usize,
+    /// Max packages sent to OSV in one scan (0 if OSV not run)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packages_osv_cap: Option<usize>,
     /// Malicious packages found (blocklist name matches)
     pub malicious_findings: Vec<MaliciousFinding>,
     /// OSV advisories for resolved versions (when network query ran)

@@ -11,7 +11,21 @@ cargo build --release
 # Binary at: target/release/pkg-guard
 
 # Optional: install to PATH
-cp target/release/pkg-guard ~/.cargo/bin/
+make install                    # → ~/.local/bin/pkg-guard
+# or: cp target/release/pkg-guard ~/.local/bin/
+```
+
+### Make shortcuts
+
+```bash
+make help          # list targets
+make release       # optimized build
+make install       # install to ~/.local/bin
+make precommit     # fmt, clippy, tests, ≥90% coverage
+make scan          # scan FILE=Cargo.lock
+make dogfood       # scan this repo's Cargo.lock
+make osv-update    # download local OSV dumps (ECOSYSTEMS=cargo optional)
+make osv-status
 ```
 
 ### Verify Installation
@@ -28,7 +42,8 @@ pkg-guard --help
 1. **Custom** — operator-maintained (zero-day)  
 2. **Feed cache** — from `pkg-guard update-db` (`~/.cache/pkg-guard/blocklist-cache.json`)
 
-Until you load a feed and/or custom list, name blocklisting is empty (OSV version checks still work when online).
+Until you load a feed and/or custom list, name blocklisting is empty. Version advisories still work via local OSV dumps and/or the live OSV API (see below).
+
 
 ### Custom lists (fast response to new threats)
 
@@ -73,17 +88,59 @@ pkg-guard blocklist status   # shows cache path, age, empty flag
 If no feed/custom list is loaded, `check` warns that the name blocklist is empty.
 If the feed cache is older than **7 days**, recommendations remind you to refresh.
 
-### OSV.dev version advisories
+### OSV version advisories (local dump or live API)
+
+`audit` and `scan` check resolved package **versions** for CVEs and `MAL-*` malware IDs.
+
+**Scan does not download the OSV dump.** Refresh the local index yourself when you want newer data.
+
+#### Recommended: local dump (offline / CI-friendly)
 
 ```bash
-pkg-guard audit -e python -p jinja2 -v 2.4.1
-# includes osv.advisories[] when the version is affected
+# Download per-ecosystem zips and build indexes under ~/.cache/pkg-guard/osv/
+pkg-guard osv update
+# or subset: pkg-guard osv update -e cargo
+# or:        make osv-update ECOSYSTEMS=cargo,python
+# or with feeds: pkg-guard update-db --feed https://… --osv
 
-pkg-guard scan -f package-lock.json
-# blocklist hits + osv_findings for resolved versions (batch API, capped)
+pkg-guard osv status
+# or: make osv-status
+
+# Force offline lookups (no api.osv.dev)
+PKG_GUARD_OSV_MODE=local pkg-guard scan -f Cargo.lock
 ```
 
-MCP: `blocklist_status`, `update_db` (optional `feeds: string[]`).
+Sources (public GCS):  
+`https://storage.googleapis.com/osv-vulnerabilities/<ECOSYSTEM>/all.zip`  
+(`PyPI`, `npm`, `Maven`, `crates.io`). Override base URL with `PKG_GUARD_OSV_DUMP_BASE` for mirrors/tests.
+
+| Ecosystem | Typical dump size (zip) | Notes |
+|-----------|-------------------------|--------|
+| cargo / crates.io | ~few MB | Fast to refresh |
+| python / PyPI | ~tens of MB | |
+| java / Maven | ~tens of MB | |
+| npm | ~200MB+ | Slowest; skip with `-e` if unused |
+
+Status treats the dump as **stale after 7 days** — re-run `osv update` to refresh. Nothing auto-updates on `scan`.
+
+#### Lookup mode (`PKG_GUARD_OSV_MODE`)
+
+| Mode | Behavior |
+|------|----------|
+| `auto` (default) | Use local index when present for that ecosystem; else live [api.osv.dev](https://osv.dev) |
+| `local` | Local dump only (errors if index missing) |
+| `online` | Live API only (previous default behaviour) |
+
+```bash
+# After osv update, auto uses the dump without extra flags
+pkg-guard scan -f package-lock.json
+pkg-guard audit -e python -p jinja2 -v 2.4.1
+# → osv.advisories[] / osv_findings; source may be "local" or "online"
+```
+
+`scan` batch is capped (e.g. first 80 packages) when using the live API path.
+
+MCP: `osv_status`, `osv_update` (optional `ecosystems: string[]`), plus `blocklist_status`, `update_db` (`feeds`, optional `osv: true`).
 
 ## Transparent package-manager shims
 
@@ -189,20 +246,31 @@ Example output:
 
 ### Scan Lock Files for Malicious Packages
 
+Checks **name blocklists** (custom + feed cache) and **OSV version advisories** (local dump and/or live API).
+
 ```bash
 pkg-guard scan -f package-lock.json
 pkg-guard scan -f yarn.lock
 pkg-guard scan -f Pipfile.lock
+pkg-guard scan -f Cargo.lock
+# make scan FILE=Cargo.lock
 ```
 
 Example output:
 ```json
 {
-  "file": "package-lock.json",
+  "file": "Cargo.lock",
+  "packages_total": 225,
+  "packages_blocklist_checked": 225,
+  "packages_osv_checked": 80,
+  "packages_osv_cap": 80,
   "findings_count": 0,
-  "status": "CLEAN — no known malicious packages found"
+  "osv_count": 0,
+  "status": "CLEAN — scanned 225 package(s), OSV-checked 80 (cap 80); no known malicious packages or OSV advisories found"
 }
 ```
+
+`packages_total` is how many deps were found in the lockfile. OSV is capped (default 80) so large repos stay fast; blocklist still covers all packages.
 
 ### Full Package Audit (Requires Docker)
 
@@ -220,8 +288,9 @@ pkg-guard audit -e java -p "org.springframework:spring-core" -v 6.1.2
 The audit performs:
 1. Typosquat check
 2. Registry metadata fetch
-3. Container installation with monitoring
-4. Aggregated risk assessment
+3. OSV version advisories (local dump and/or live API)
+4. Container installation with monitoring (when Docker is available)
+5. Aggregated risk assessment
 
 Example output:
 ```json
@@ -270,12 +339,16 @@ Add to `~/.kiro/settings/mcp.json`:
         "check_typosquat",
         "get_package_metadata",
         "pin_dependencies",
-        "scan_lockfile"
+        "scan_lockfile",
+        "blocklist_status",
+        "osv_status"
       ]
     }
   }
 }
 ```
+
+Restart the MCP host after upgrading the binary so it picks up new tools.
 
 ### Available MCP Tools
 
@@ -319,7 +392,7 @@ Analyze a dependency file for version pinning compliance.
 
 #### `scan_lockfile`
 
-Check a lock file against the malicious package blocklist.
+Check a lock file against custom/feed name blocklists **and** OSV (local dump / live API).
 
 ```json
 {
@@ -339,6 +412,47 @@ Fetch registry metadata without installing.
 }
 ```
 
+#### `audit_project`
+
+Walk a project tree for manifests/lockfiles (pins + name blocklist).
+
+```json
+{
+  "project_path": "/path/to/project"
+}
+```
+
+#### `blocklist_status`
+
+Custom list paths, feed-cache snapshot, and OSV dump status.
+
+#### `update_db`
+
+Refresh feed cache from URLs. Optional `osv: true` also runs an OSV dump update.
+
+```json
+{
+  "feeds": ["https://your-host/blocklist.json"],
+  "osv": false
+}
+```
+
+#### `osv_status`
+
+Local OSV dump path, age, ecosystems, and `PKG_GUARD_OSV_MODE`.
+
+#### `osv_update`
+
+Download OSV ecosystem dumps and rebuild indexes (can take minutes; npm is large).
+
+```json
+{
+  "ecosystems": ["cargo", "python"]
+}
+```
+
+Omit `ecosystems` to update all defaults (python, npm, java, cargo).
+
 ## CI/CD Integration
 
 ### GitHub Actions
@@ -355,10 +469,17 @@ jobs:
           curl -L https://github.com/<org>/pkg-guard/releases/latest/download/pkg-guard-linux-amd64 -o /usr/local/bin/pkg-guard
           chmod +x /usr/local/bin/pkg-guard
 
+      # Optional offline OSV: cache ~/.cache/pkg-guard/osv across runs
+      - name: Refresh local OSV dump
+        run: pkg-guard osv update -e cargo,python
+        # or full: pkg-guard osv update
+
       - name: Check dependency pinning
         run: pkg-guard pin -f requirements.txt
 
-      - name: Scan for malicious packages
+      - name: Scan for malicious packages (local OSV)
+        env:
+          PKG_GUARD_OSV_MODE: local
         run: pkg-guard scan -f requirements.txt
 
       - name: Audit new dependencies
@@ -386,16 +507,39 @@ if git diff --cached --name-only | grep -qE '(requirements.*\.txt|package\.json|
 fi
 ```
 
+## Environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `PKG_GUARD_BLOCKLIST` | Extra custom blocklist JSON path |
+| `PKG_GUARD_FEED_URLS` | Comma-separated feed URLs for `update-db` |
+| `PKG_GUARD_CACHE_DIR` | Cache root (feed + OSV indexes; default `~/.cache/pkg-guard`) |
+| `PKG_GUARD_OSV_MODE` | `auto` \| `local` \| `online` (OSV lookup) |
+| `PKG_GUARD_OSV_DUMP_BASE` | Mirror base for OSV zips (default Google GCS bucket) |
+| `PKG_GUARD_SHIM_MODE` | `enforce` \| `warn` \| `off` |
+| `PKG_GUARD_REAL_<TOOL>` | Absolute path to real `pip` / `npm` / `cargo` / … |
+| `RUST_LOG` | Tracing filter (`debug`, `info`, …) |
+
 ## Troubleshooting
 
 ### Docker not available
 
-If Docker isn't installed or running, the `audit` command will report:
-```json
-{"error": "Cannot connect to Docker: ..."}
+If Docker isn't installed or running, container steps in `audit` fail or degrade; typosquat, metadata, and OSV still run.
+
+### Local OSV index missing
+
+```text
+Local OSV index missing for crates.io … Run: pkg-guard osv update
 ```
 
-The audit still performs typosquat and metadata checks — only the container isolation is skipped.
+With `PKG_GUARD_OSV_MODE=local`, update dumps first. With `auto`, the tool falls back to the live API when the index is missing.
+
+### OSV dump looks stale
+
+```bash
+pkg-guard osv status    # age_days, stale flag
+pkg-guard osv update    # refresh
+```
 
 ### Package not found
 
@@ -418,5 +562,6 @@ pkg-guard check -e java -p "org.springframework.boot:spring-boot"
 
 ```bash
 RUST_LOG=debug pkg-guard check -e python -p requests
+RUST_LOG=info pkg-guard osv update -e cargo
 RUST_LOG=trace pkg-guard audit -e npm -p express -v 4.18.2
 ```
