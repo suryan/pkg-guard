@@ -45,11 +45,13 @@ pkg-guard/
 │   │   └── mod.rs       # Container orchestrator
 │   └── data/
 │       ├── mod.rs       # Shared types
-│       ├── blocklist.rs          # Lookup order + seed load
+│       ├── blocklist.rs          # Lookup: custom → feed (no embedded denylist)
 │       ├── blocklist_format.rs   # Shared JSON schema
 │       ├── custom_blocklist.rs   # User/project custom lists
 │       ├── feed_cache.rs         # update-db cache
 │       └── update_db.rs          # Remote feed refresh
+│   ├── osv/                 # OSV.dev version advisories
+│   ├── shim/                # Transparent pip/npm/cargo multicall
 ├── docs/                # Documentation
 └── target/              # Build output (gitignored)
 ```

@@ -133,7 +133,8 @@ These attacks succeed because there is no automated gate between "developer type
 
 ## Success Metrics
 
-- Blocks 100% of packages on the embedded blocklist
+- Blocks 100% of packages on loaded custom + feed-cache name lists
+- Transparent shims gate common `pip`/`npm`/`cargo` install flows when on PATH
 - Detects typosquats within edit distance 2 with zero false negatives on the popular package list
 - Container audit catches network exfiltration and filesystem abuse in test scenarios
 - Full audit completes in under 2 minutes per package

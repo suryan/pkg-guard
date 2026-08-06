@@ -36,10 +36,10 @@ Both interfaces share the same core modules. The binary compiles to ~8-12MB with
 │  ┌──────────────┐  ┌────────────────────────────────────┐  │
 │  │    audit     │  │              data                   │  │
 │  │    ─────     │  │              ────                   │  │
-│  │  Docker API  │  │  Blocklist stack                    │  │
-│  │  (bollard)   │  │  custom → feed cache → seed JSON    │  │
-│  │  Container   │  │  Popular packages (data JSON)       │  │
-│  │  orchestrate │  │  Shared types (Ecosystem, Results)  │  │
+│  │  Docker API  │  │  Blocklist: custom → feed cache     │  │
+│  │  (bollard)   │  │  (no denylist embedded in binary)   │  │
+│  │  Container   │  │  Popular names (typosquat only)     │  │
+│  │  orchestrate │  │  OSV + shims (pip/npm/cargo)        │  │
 │  └──────────────┘  └────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -61,7 +61,7 @@ Design decisions:
 ### `src/typosquat/` — Detection Engine
 
 Multi-layered detection:
-1. **Blocklist check** — O(1) HashSet lookup against known malicious names
+1. **Blocklist check** — custom + feed-cache name lookup (nothing embedded)
 2. **Levenshtein distance** — flags packages within edit distance ≤ 2 of popular packages
 3. **Jaro-Winkler similarity** — catches prefix-similar names (threshold ≥ 0.85)
 4. **Homoglyph detection** — identifies visual lookalikes (l/1, O/0, I/l)

@@ -40,7 +40,7 @@ Locations (merged if several exist):
 
 ```bash
 pkg-guard blocklist init
-# Edit ~/.config/pkg-guard/blocklist.json — add names under python / npm / java
+# Edit ~/.config/pkg-guard/blocklist.json — add names under python / npm / java / cargo
 pkg-guard blocklist reload
 pkg-guard blocklist status
 pkg-guard check -e python -p that-new-malicious-name
@@ -137,7 +137,7 @@ pip list                         # pass-through, no gate
 ```bash
 # Python
 pkg-guard check -e python -p reqeusts
-# Output: BLOCKED — package is on the known-malicious blocklist
+# Output: BLOCKED if on custom list or feed cache (no denylist in the binary)
 
 pkg-guard check -e python -p requsts
 # Output: WARNING — similar to 'requests' (distance: 1)

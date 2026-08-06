@@ -9,7 +9,7 @@ Built in Rust for performance, safety, and zero-dependency deployment.
 - **Typosquat Detection** — Levenshtein distance, Jaro-Winkler similarity, homoglyph detection, and common mutation pattern matching against 100+ popular packages per ecosystem
 - **Container Auditing** — Installs packages in isolated Docker containers with hardened security (cap-drop ALL, memory limits, PID limits) and monitors network, filesystem, and process activity
 - **Dependency Pinning Analysis** — Scans requirements.txt, package.json, pom.xml, and build.gradle for unpinned or loosely-pinned versions
-- **Lock File Scanning** — Checks package-lock.json, yarn.lock, Pipfile.lock, and requirements.txt against an embedded blocklist of known malicious packages
+- **Lock File Scanning** — Checks package-lock.json, yarn.lock, Pipfile.lock, Cargo.lock, and requirements.txt against custom/feed name lists + OSV
 - **Registry Metadata** — Fetches package info from PyPI, npm, and Maven Central without installing anything
 - **MCP Server** — Runs as a Model Context Protocol server for IDE integration (Kiro, VS Code, etc.)
 - **Standalone CLI** — Use directly from the terminal for CI/CD pipelines and ad-hoc checks
@@ -22,7 +22,7 @@ cargo build --release
 
 # Check a package for typosquatting
 pkg-guard check -e python -p reqeusts
-# → BLOCKED — package is on the known-malicious blocklist
+# → BLOCKED if on custom list or feed cache (no denylist embedded in the binary)
 
 # Scan your dependencies for pinning issues
 pkg-guard pin -f requirements.txt
@@ -123,11 +123,11 @@ The `audit_package` tool is intentionally not auto-approved since it launches Do
 | `audit_package` | Full audit with container isolation |
 | `check_typosquat` | Typosquat detection against popular packages |
 | `pin_dependencies` | Scan dependency files for unpinned versions |
-| `scan_lockfile` | Check lock files against malicious package blocklist |
+| `scan_lockfile` | Lockfiles: custom/feed blocklists + OSV advisories |
 | `get_package_metadata` | Fetch registry metadata without installing |
 | `audit_project` | Scan an entire project tree for pins + malicious packages |
-| `blocklist_status` | Custom / feed cache / seed status |
-| `update_db` | Refresh feed cache (seed + default/remote feeds) |
+| `blocklist_status` | Custom / feed-cache status (no embedded denylist) |
+| `update_db` | Refresh feed cache from remote feed URLs |
 
 ## Supported Ecosystems
 
@@ -157,9 +157,12 @@ src/
 ├── parsers/         # Dependency file parsers
 ├── audit/           # Container audit orchestrator (bollard)
 ├── project/         # Whole-repo manifest + lockfile scanner
+├── shim/            # Transparent pip/npm/cargo multicall wrappers
 └── data/            # Blocklist stack + shared types
 data/blocklist/      # popular.json (typosquat); example-feed.json (host yourself)
 ```
+
+Also: `pkg-guard shim install|status|uninstall` for PATH-level install gates.
 
 ## License
 
