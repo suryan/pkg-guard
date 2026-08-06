@@ -83,6 +83,9 @@ pub struct AuditResult {
     /// Container audit results (if performed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container_audit: Option<ContainerAuditResult>,
+    /// OSV.dev advisories for this name@version (if queried)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub osv: Option<crate::osv::OsvQueryResult>,
     /// Human-readable recommendation
     pub recommendation: String,
 }
@@ -193,10 +196,16 @@ pub struct PinnedDep {
 pub struct ScanResult {
     /// Path to the file scanned
     pub file: String,
-    /// Malicious packages found
+    /// Malicious packages found (blocklist name matches)
     pub malicious_findings: Vec<MaliciousFinding>,
-    /// Number of findings
+    /// OSV advisories for resolved versions (when network query ran)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub osv_findings: Vec<crate::osv::OsvAdvisory>,
+    /// Number of blocklist findings
     pub findings_count: usize,
+    /// Number of OSV advisories
+    #[serde(default)]
+    pub osv_count: usize,
     /// Overall status message
     pub status: String,
 }

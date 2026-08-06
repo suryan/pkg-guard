@@ -111,9 +111,11 @@ async fn handle_tool_call(params: &Value) -> ToolCallResult {
         "audit_package" => handle_audit_package(&arguments).await,
         "check_typosquat" => handle_check_typosquat(&arguments),
         "pin_dependencies" => handle_pin_dependencies(&arguments),
-        "scan_lockfile" => handle_scan_lockfile(&arguments),
+        "scan_lockfile" => handle_scan_lockfile(&arguments).await,
         "get_package_metadata" => handle_get_package_metadata(&arguments).await,
         "audit_project" => handle_audit_project(&arguments),
+        "blocklist_status" => handle_blocklist_status(),
+        "update_db" => handle_update_db(&arguments).await,
         _ => ToolCallResult::error(format!("Unknown tool: {tool_name}")),
     }
 }
@@ -205,12 +207,12 @@ fn handle_pin_dependencies(args: &Value) -> ToolCallResult {
     }
 }
 
-fn handle_scan_lockfile(args: &Value) -> ToolCallResult {
+async fn handle_scan_lockfile(args: &Value) -> ToolCallResult {
     let Some(file_path) = args.get("file_path").and_then(Value::as_str) else {
         return ToolCallResult::error("Missing required parameter: file_path".to_string());
     };
 
-    match parsers::scan_lockfile(file_path) {
+    match parsers::scan_lockfile_with_osv(file_path).await {
         Ok(result) => {
             let json = serde_json::to_string_pretty(&result).unwrap_or_default();
             ToolCallResult::text(json)
@@ -254,5 +256,53 @@ fn handle_audit_project(args: &Value) -> ToolCallResult {
             ToolCallResult::text(json)
         }
         Err(e) => ToolCallResult::error(format!("Project audit failed: {e}")),
+    }
+}
+
+fn handle_blocklist_status() -> ToolCallResult {
+    let snap = data::custom_blocklist::snapshot();
+    let (seed_py, seed_npm, seed_java) = data::blocklist::seed_entry_counts();
+    let status = serde_json::json!({
+        "lookup_order": ["custom", "feed_cache", "seed"],
+        "custom": {
+            "candidate_paths": data::custom_blocklist::candidate_paths(),
+            "loaded_paths": snap.loaded_paths,
+            "total_entries": snap.total_entries(),
+            "load_errors": snap.errors,
+        },
+        "feed_cache": data::feed_cache::status_snapshot(),
+        "seed": {
+            "source": "data/blocklist/seed.json (embedded)",
+            "python": seed_py,
+            "npm": seed_npm,
+            "java": seed_java,
+        },
+        "default_feeds": "data/blocklist/default-feeds.json (used by update_db when no feeds given)",
+        "osv": "OSV.dev version advisories used by audit_package and scan_lockfile",
+    });
+    match serde_json::to_string_pretty(&status) {
+        Ok(json) => ToolCallResult::text(json),
+        Err(e) => ToolCallResult::error(format!("Failed to serialize status: {e}")),
+    }
+}
+
+async fn handle_update_db(args: &Value) -> ToolCallResult {
+    let feeds: Vec<String> = args
+        .get("feeds")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    match data::update_db::update_db(&feeds).await {
+        Ok(result) => {
+            let json = serde_json::to_string_pretty(&result).unwrap_or_default();
+            ToolCallResult::text(json)
+        }
+        Err(e) => ToolCallResult::error(format!("update_db failed: {e}")),
     }
 }

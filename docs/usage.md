@@ -75,6 +75,22 @@ pkg-guard blocklist status   # shows cache path, age, stale flag
 If the cache is missing or older than **7 days**, `check` / audit recommendations
 include a reminder to run `update-db`.
 
+Default remote feeds are listed in `data/blocklist/default-feeds.json` (embedded)
+and are used automatically when no `--feed` / `PKG_GUARD_FEED_URLS` is set.
+Unreachable defaults soft-fail; the seed is always merged into the cache.
+
+### OSV.dev version advisories
+
+```bash
+pkg-guard audit -e python -p jinja2 -v 2.4.1
+# includes osv.advisories[] when the version is affected
+
+pkg-guard scan -f package-lock.json
+# blocklist hits + osv_findings for resolved versions (batch API, capped)
+```
+
+MCP: `blocklist_status`, `update_db` (optional `feeds: string[]`).
+
 ## CLI Usage
 
 ### Check a Package for Typosquatting

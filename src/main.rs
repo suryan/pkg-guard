@@ -6,6 +6,7 @@
 mod audit;
 mod data;
 mod mcp;
+mod osv;
 mod parsers;
 mod project;
 mod registry;
@@ -130,7 +131,7 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Commands::Scan { file } => {
-            let result = parsers::scan_lockfile(&file)?;
+            let result = parsers::scan_lockfile_with_osv(&file).await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Commands::Project { path } => {

@@ -85,19 +85,167 @@ pub fn scan_lockfile(file_path: &str) -> Result<ScanResult> {
         ));
     };
 
-    let findings_count = findings.len();
-    let status = if findings.is_empty() {
-        "CLEAN — no known malicious packages found".to_string()
-    } else {
-        format!("CRITICAL — {findings_count} malicious package(s) detected")
-    };
+    Ok(build_scan_result(file_path.to_string(), findings, vec![]))
+}
 
-    Ok(ScanResult {
-        file: file_path.to_string(),
+/// Scan a lock file against the blocklist **and** OSV version advisories.
+///
+/// # Errors
+/// Returns an error if the file cannot be read or has an unsupported format.
+pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
+    let mut result = scan_lockfile(file_path)?;
+    let packages = extract_resolved_packages(file_path)?;
+    // Cap network load for large lockfiles
+    let capped: Vec<_> = packages.into_iter().take(80).collect();
+    if capped.is_empty() {
+        return Ok(result);
+    }
+
+    match crate::osv::query_batch(&capped).await {
+        Ok(batch) => {
+            let mut osv_findings = Vec::new();
+            for item in batch {
+                for adv in item.advisories {
+                    osv_findings.push(adv);
+                }
+            }
+            result.osv_count = osv_findings.len();
+            result.osv_findings = osv_findings;
+            result.status = compose_scan_status(
+                result.findings_count,
+                result.osv_count,
+                &result.osv_findings,
+            );
+        }
+        Err(e) => {
+            result.status = format!(
+                "{}; OSV lookup failed: {e}",
+                compose_scan_status(result.findings_count, 0, &[])
+            );
+        }
+    }
+
+    Ok(result)
+}
+
+fn build_scan_result(
+    file: String,
+    findings: Vec<MaliciousFinding>,
+    osv_findings: Vec<crate::osv::OsvAdvisory>,
+) -> ScanResult {
+    let findings_count = findings.len();
+    let osv_count = osv_findings.len();
+    let status = compose_scan_status(findings_count, osv_count, &osv_findings);
+    ScanResult {
+        file,
         malicious_findings: findings,
+        osv_findings,
         findings_count,
+        osv_count,
         status,
-    })
+    }
+}
+
+fn compose_scan_status(
+    blocklist_count: usize,
+    osv_count: usize,
+    osv: &[crate::osv::OsvAdvisory],
+) -> String {
+    let malware = osv.iter().filter(|a| a.is_malware).count();
+    if blocklist_count > 0 || malware > 0 {
+        format!(
+            "CRITICAL — {blocklist_count} blocklist hit(s), {malware} OSV malware, {osv_count} total OSV advisory(ies)"
+        )
+    } else if osv_count > 0 {
+        format!("WARNING — {osv_count} OSV advisory(ies) for resolved versions")
+    } else {
+        "CLEAN — no known malicious packages or OSV advisories found".to_string()
+    }
+}
+
+/// Extract (ecosystem, name, version) triples from a lock/requirements file.
+fn extract_resolved_packages(file_path: &str) -> Result<Vec<(Ecosystem, String, String)>> {
+    let path = Path::new(file_path);
+    let content = fs::read_to_string(path)?;
+    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+    if filename == "package-lock.json" {
+        extract_npm_packages(&content)
+    } else if is_requirements_file(filename) {
+        Ok(extract_requirements_packages(&content))
+    } else if filename == "Pipfile.lock" {
+        extract_pipfile_packages(&content)
+    } else {
+        // yarn.lock version extraction not implemented yet
+        Ok(vec![])
+    }
+}
+
+fn extract_npm_packages(content: &str) -> Result<Vec<(Ecosystem, String, String)>> {
+    let data: Value =
+        serde_json::from_str(content).map_err(|e| anyhow!("Invalid JSON in lock file: {e}"))?;
+    let mut out = Vec::new();
+    if let Some(pkgs) = data.get("packages").and_then(Value::as_object) {
+        for (pkg_path, pkg_info) in pkgs {
+            let pkg_name = pkg_path.strip_prefix("node_modules/").unwrap_or(pkg_path);
+            if pkg_name.is_empty() || pkg_name.contains('/') && !pkg_name.starts_with('@') {
+                // skip nested paths like node_modules/a/node_modules/b — only top-level keys
+                // actually npm v2 keys are full paths; take basename segment
+            }
+            let name = if let Some(rest) = pkg_name.strip_prefix("node_modules/") {
+                rest
+            } else {
+                pkg_name
+            };
+            // For scoped: node_modules/@scope/pkg
+            let name = name.rsplit("/node_modules/").next().unwrap_or(name);
+            if name.is_empty() {
+                continue;
+            }
+            if let Some(ver) = pkg_info.get("version").and_then(Value::as_str) {
+                out.push((Ecosystem::Npm, name.to_string(), ver.to_string()));
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn extract_requirements_packages(content: &str) -> Vec<(Ecosystem, String, String)> {
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('-') {
+            continue;
+        }
+        // name==version
+        if let Some((name, ver)) = line.split_once("==") {
+            let name = name.trim();
+            let ver = ver.split(';').next().unwrap_or(ver).trim();
+            if !name.is_empty() && !ver.is_empty() {
+                out.push((Ecosystem::Python, name.to_string(), ver.to_string()));
+            }
+        }
+    }
+    out
+}
+
+fn extract_pipfile_packages(content: &str) -> Result<Vec<(Ecosystem, String, String)>> {
+    let data: Value =
+        serde_json::from_str(content).map_err(|e| anyhow!("Invalid Pipfile.lock: {e}"))?;
+    let mut out = Vec::new();
+    for section in ["default", "develop"] {
+        if let Some(deps) = data.get(section).and_then(Value::as_object) {
+            for (name, info) in deps {
+                if let Some(ver) = info.get("version").and_then(Value::as_str) {
+                    let ver = ver.trim_start_matches("==").trim();
+                    if !ver.is_empty() {
+                        out.push((Ecosystem::Python, name.clone(), ver.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn is_requirements_file(filename: &str) -> bool {

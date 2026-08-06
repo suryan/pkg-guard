@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "description": "Default remote blocklist feeds used by `pkg-guard update-db` when no PKG_GUARD_FEED_URLS / --feed is given. Soft-fail if unreachable.",
+  "feeds": [
+    {
+      "name": "pkg-guard-seed-mirror",
+      "url": "https://raw.githubusercontent.com/surya/pkg-guard/master/data/blocklist/seed.json",
+      "enabled": true
+    }
+  ]
+}

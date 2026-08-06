@@ -124,7 +124,7 @@ These attacks succeed because there is no automated gate between "developer type
 
 - Real-time package registry monitoring / webhook integration
 - Bundled default remote malware feed (operators supply `PKG_GUARD_FEED_URLS` / `--feed`)
-- OSV/CVE version-range advisory matching (name blocklists only for now)
+- Full offline OSV database mirror (live API queries only; no local OSV dump)
 - Dependency confusion detection (requires private registry knowledge)
 - SBOM generation (Software Bill of Materials)
 - Integration with Snyk/Dependabot/Renovate

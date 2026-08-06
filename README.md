@@ -74,11 +74,17 @@ pkg-guard blocklist status
 
 ```bash
 pkg-guard update-db
+# Uses default feeds from data/blocklist/default-feeds.json when no URLs given
 pkg-guard update-db --feed https://example.com/blocklist.json
 # PKG_GUARD_FEED_URLS=url1,url2
 ```
 
 Cache: `~/.cache/pkg-guard/blocklist-cache.json` (override with `PKG_GUARD_CACHE_DIR`).
+
+### OSV version advisories
+
+`audit` and `scan` query [OSV.dev](https://osv.dev) for the resolved package version
+(CVEs and `MAL-*` malware IDs). Malware / CRITICAL / HIGH → BLOCK; other hits → WARN.
 
 ### Seed (repo data, embedded at build)
 
@@ -113,6 +119,8 @@ The `audit_package` tool is intentionally not auto-approved since it launches Do
 | `scan_lockfile` | Check lock files against malicious package blocklist |
 | `get_package_metadata` | Fetch registry metadata without installing |
 | `audit_project` | Scan an entire project tree for pins + malicious packages |
+| `blocklist_status` | Custom / feed cache / seed status |
+| `update_db` | Refresh feed cache (seed + default/remote feeds) |
 
 ## Supported Ecosystems
 

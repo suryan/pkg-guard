@@ -120,10 +120,15 @@ Container security posture:
 | `blocklist_format.rs` | Shared JSON document shape for seed / feeds / custom |
 | `custom_blocklist.rs` | User/project/env custom lists (highest priority) |
 | `feed_cache.rs` | Runtime cache from `update-db` (`~/.cache/pkg-guard/`) |
-| `update_db.rs` | Fetch remote feeds, merge with seed, write cache |
+| `update_db.rs` | Fetch remote feeds (defaults + env/CLI), merge with seed, write cache |
 | `mod.rs` | Shared types: Ecosystem, AuditResult, TyposquatResult, … |
 
 **Lookup order:** custom → feed cache → built-in seed.
+
+### `src/osv/` — Version advisories
+
+Queries [OSV.dev](https://osv.dev) (`/v1/query`, `/v1/querybatch`) for CVE / `MAL-*`
+hits on exact package versions during `audit` and `scan`.
 
 Seed data lives under `data/blocklist/` in the repo and is **embedded at compile time** so the binary still works offline. Feeds and custom lists are **not** in source; they update without a rebuild.
 

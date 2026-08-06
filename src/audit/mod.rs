@@ -20,6 +20,7 @@ use serde_json::Value;
 use tracing::{debug, error, info, warn};
 
 use crate::data::{AuditResult, AuditStatus, ContainerAuditResult, Ecosystem, SuspiciousActivity};
+use crate::osv;
 use crate::registry;
 use crate::typosquat;
 
@@ -66,6 +67,7 @@ pub async fn audit_package(
             typosquat_check: typosquat_result,
             metadata: None,
             container_audit: None,
+            osv: None,
             recommendation: "DO NOT INSTALL — package is known malicious".to_string(),
         });
     }
@@ -89,13 +91,31 @@ pub async fn audit_package(
                 typosquat_check: typosquat_result,
                 metadata,
                 container_audit: None,
+                osv: None,
                 recommendation: "FAILED — package does not exist on the registry".to_string(),
             });
         }
     }
 
+    // Step 2b: OSV version advisories (CVE / MAL-*)
+    let osv_result = match osv::query_package(ecosystem, package_name, version).await {
+        Ok(r) => Some(r),
+        Err(e) => {
+            warn!("OSV query failed (continuing audit): {e}");
+            Some(osv::OsvQueryResult {
+                package: package_name.to_string(),
+                version: version.to_string(),
+                ecosystem: format!("{ecosystem}"),
+                advisories: vec![],
+                error: Some(e.to_string()),
+            })
+        }
+    };
+
     // Step 3 & 4: Collect warnings and run container
     let mut warnings = collect_metadata_warnings(ecosystem, metadata.as_ref());
+    apply_osv_warnings(osv_result.as_ref(), &mut warnings);
+
     let container_audit = run_audit_if_needed(
         ecosystem,
         package_name,
@@ -107,7 +127,8 @@ pub async fn audit_package(
     .await;
 
     // Step 5: Determine overall status
-    let status = determine_status(&typosquat_result, container_audit.as_ref(), &mut warnings);
+    let mut status = determine_status(&typosquat_result, container_audit.as_ref(), &mut warnings);
+    status = elevate_with_osv(status, osv_result.as_ref());
 
     let recommendation = match status {
         AuditStatus::Pass => "SAFE to install — pin exact version with hash".to_string(),
@@ -127,6 +148,7 @@ pub async fn audit_package(
         typosquat_check: typosquat_result,
         metadata,
         container_audit,
+        osv: osv_result,
         recommendation,
     })
 }
@@ -196,6 +218,43 @@ async fn run_audit_if_needed(
             })
         }
     }
+}
+
+fn apply_osv_warnings(osv: Option<&osv::OsvQueryResult>, warnings: &mut Vec<String>) {
+    let Some(osv) = osv else {
+        return;
+    };
+    if let Some(err) = &osv.error {
+        warnings.push(format!("OSV advisory lookup incomplete: {err}"));
+        return;
+    }
+    for adv in &osv.advisories {
+        let kind = if adv.is_malware {
+            "MALWARE"
+        } else {
+            "advisory"
+        };
+        warnings.push(format!(
+            "OSV {kind} {} ({}) — {}",
+            adv.id, adv.severity, adv.summary
+        ));
+    }
+}
+
+fn elevate_with_osv(status: AuditStatus, osv: Option<&osv::OsvQueryResult>) -> AuditStatus {
+    let Some(osv) = osv else {
+        return status;
+    };
+    if osv.has_malware() {
+        return elevate(status, AuditStatus::Blocked);
+    }
+    if osv.has_critical_or_high() {
+        return elevate(status, AuditStatus::Blocked);
+    }
+    if !osv.advisories.is_empty() {
+        return elevate(status, AuditStatus::Warning);
+    }
+    status
 }
 
 /// Elevate status only toward higher severity: Pass < Warning < Blocked < Failed.

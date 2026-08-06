@@ -28,6 +28,11 @@ pub struct UpdateDbResult {
 
 /// Fetch remote feed URLs (if any), merge with seed, write cache.
 ///
+/// Feed resolution order:
+/// 1. Explicit `extra_feeds` (CLI `--feed` / MCP)
+/// 2. `PKG_GUARD_FEED_URLS` (comma-separated)
+/// 3. Built-in defaults from `data/blocklist/default-feeds.json`
+///
 /// # Errors
 /// Returns an error only if the cache cannot be written after merge.
 pub async fn update_db(extra_feeds: &[String]) -> Result<UpdateDbResult> {
@@ -39,6 +44,15 @@ pub async fn update_db(extra_feeds: &[String]) -> Result<UpdateDbResult> {
     for u in extra_feeds {
         if !u.trim().is_empty() && !urls.contains(u) {
             urls.push(u.clone());
+        }
+    }
+    if urls.is_empty() {
+        urls = default_feed_urls();
+        if !urls.is_empty() {
+            info!(
+                "Using {} default feed URL(s) from data/blocklist/default-feeds.json",
+                urls.len()
+            );
         }
     }
 
@@ -125,6 +139,41 @@ fn env_feed_urls() -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(ToString::to_string)
         .collect()
+}
+
+/// Built-in default feeds (embedded). Soft-failed at fetch time if unreachable.
+const DEFAULT_FEEDS_JSON: &str = include_str!("../../data/blocklist/default-feeds.json");
+
+#[derive(Debug, serde::Deserialize)]
+struct DefaultFeedsFile {
+    #[serde(default)]
+    feeds: Vec<DefaultFeedEntry>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DefaultFeedEntry {
+    url: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_feed_urls() -> Vec<String> {
+    match serde_json::from_str::<DefaultFeedsFile>(DEFAULT_FEEDS_JSON) {
+        Ok(file) => file
+            .feeds
+            .into_iter()
+            .filter(|f| f.enabled && !f.url.trim().is_empty())
+            .map(|f| f.url)
+            .collect(),
+        Err(e) => {
+            warn!("default-feeds.json invalid: {e}");
+            vec![]
+        }
+    }
 }
 
 async fn fetch_feed(client: &reqwest::Client, url: &str) -> Result<BlocklistDocument> {

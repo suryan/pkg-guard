@@ -12,6 +12,8 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
         scan_lockfile_tool(),
         get_package_metadata_tool(),
         audit_project_tool(),
+        blocklist_status_tool(),
+        update_db_tool(),
     ]
 }
 
@@ -19,8 +21,8 @@ fn audit_package_tool() -> ToolDefinition {
     ToolDefinition {
         name: "audit_package".to_string(),
         description: "Audit a software package for security risks. Checks for typosquatting, \
-            verifies registry metadata, and optionally runs isolated container audit \
-            monitoring network/filesystem/process activity during installation."
+            OSV.dev version advisories (CVE/MAL), registry metadata, and optionally runs \
+            isolated container audit monitoring network/filesystem/process activity."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -117,10 +119,8 @@ fn pin_dependencies_tool() -> ToolDefinition {
 fn scan_lockfile_tool() -> ToolDefinition {
     ToolDefinition {
         name: "scan_lockfile".to_string(),
-        description: "Scan a lock file for known malicious or compromised package versions. \
-            Checks against the built-in seed blocklist plus any custom user/project \
-            blocklist (PKG_GUARD_BLOCKLIST, ~/.config/pkg-guard/blocklist.json, \
-            .pkg-guard/blocklist.json)."
+        description: "Scan a lock file for known malicious packages (custom/feed/seed blocklists) \
+            and OSV.dev version advisories for resolved dependencies."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -178,6 +178,40 @@ fn audit_project_tool() -> ToolDefinition {
                     "type": "string",
                     "description": "Path to the project root directory (default: current directory)",
                     "default": "."
+                }
+            },
+            "required": []
+        }),
+    }
+}
+
+fn blocklist_status_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "blocklist_status".to_string(),
+        description: "Show blocklist layer status: custom lists, feed cache age/staleness, \
+            and embedded seed counts. Lookup order is custom → feed_cache → seed."
+            .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        }),
+    }
+}
+
+fn update_db_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "update_db".to_string(),
+        description: "Refresh the feed cache by merging the built-in seed with remote feeds \
+            (default feeds and/or provided URLs). Writes ~/.cache/pkg-guard/blocklist-cache.json."
+            .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "feeds": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional extra feed URLs (JSON blocklist documents). Defaults from PKG_GUARD_FEED_URLS and data/blocklist/default-feeds.json apply when empty."
                 }
             },
             "required": []
