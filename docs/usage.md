@@ -98,18 +98,26 @@ If the feed cache is older than **7 days**, recommendations remind you to refres
 
 ```bash
 # Download per-ecosystem zips and build indexes under ~/.cache/pkg-guard/osv/
-# Progress (size / % / speed) prints on stderr while downloading.
+# Progress on stderr. Skips ecosystems already matching remote (ETag/Last-Modified).
 pkg-guard osv update
+pkg-guard osv update --force          # re-download even if latest
 # or subset: pkg-guard osv update -e cargo
 # or:        make osv-update ECOSYSTEMS=cargo,python
-# or with feeds: pkg-guard update-db --feed https://… --osv
 
-pkg-guard osv status
+pkg-guard osv status                  # local state + remote up_to_date per ecosystem
 # or: make osv-status
+
+# Scan auto-refreshes dumps when needed (skip with PKG_GUARD_OSV_AUTO_UPDATE=0)
+pkg-guard scan -f Cargo.lock
 
 # Force offline lookups (no api.osv.dev)
 PKG_GUARD_OSV_MODE=local pkg-guard scan -f Cargo.lock
 ```
+
+**How “already latest” is detected:** on `osv update` (and scan auto-refresh), pkg-guard
+sends HTTP `HEAD` to each dump zip and compares `ETag` / `Last-Modified` / size with values
+stored in `~/.cache/pkg-guard/osv/meta.json`. Match → **skip download** (`action:
+skipped_up_to_date`). Use `--force` to ignore that.
 
 Sources (public GCS):  
 `https://storage.googleapis.com/osv-vulnerabilities/<ECOSYSTEM>/all.zip`  
@@ -173,20 +181,23 @@ in a dep you never typed.
 
 | Launcher | Gated |
 |----------|--------|
-| `uvx pkg==ver` / `uv tool run …` | Top-level package name (+ version OSV if pinned) |
-| `npx -y pkg@ver` / `pnpm dlx` / `yarn dlx` | Top-level package name (+ version if present) |
-| `pip install` / `npm install` / `cargo add` | As before |
+| `uvx pkg==ver` / `uv tool run …` | Top-level + **transitive** runtime deps (bounded: depth≤3, max 80 packages); blocklist + OSV when version known |
+| `npx -y pkg@ver` / `pnpm dlx` / `yarn dlx` | Same (npm registry deps) |
+| `pip install` / `npm install` / `cargo add` | As before (install line packages / files) |
 
-**What they do *not* do yet**
+Transitive resolve uses registry metadata (not a full solver). Disable with
+`PKG_GUARD_SHIM_TRANSITIVE=0`.
 
-- Fully resolve and audit the **entire** transitive tree *before* `uvx`/`npx` runs
-- Stop absolute-path launches (`/home/…/.local/bin/uvx` if not shimmed first on `PATH`)
+**Residual gaps**
+
+- Optional/dev extras and complex version ranges may be incomplete  
+- Absolute-path launches bypass shims if not first on `PATH`  
 
 **Practical controls**
 
 1. Install shims so `uvx`/`npx` on `PATH` hit pkg-guard first  
 2. **Pin versions** in MCP config (`pkg==1.2.3`, `pkg@1.2.3`) so OSV can match  
-3. Keep **local OSV dumps** fresh (`pkg-guard osv update`)  
+3. Keep **local OSV dumps** fresh (scan auto-refreshes; or `pkg-guard osv update`)  
 4. Prefer custom/feed **blocklists** for known-bad names  
 5. For high-trust MCP tools, prefer a **vendored/binary** install over floating `uvx`/`npx`  
 
@@ -563,8 +574,10 @@ fi
 | `PKG_GUARD_FEED_URLS` | Comma-separated feed URLs for `update-db` |
 | `PKG_GUARD_CACHE_DIR` | Cache root (feed + OSV indexes; default `~/.cache/pkg-guard`) |
 | `PKG_GUARD_OSV_MODE` | `auto` \| `local` \| `online` (OSV lookup) |
+| `PKG_GUARD_OSV_AUTO_UPDATE` | On scan, refresh dumps if remote changed (default **on**; set `0` to disable) |
 | `PKG_GUARD_OSV_DUMP_BASE` | Mirror base for OSV zips (default Google GCS bucket) |
 | `PKG_GUARD_SHIM_MODE` | `enforce` \| `warn` \| `off` |
+| `PKG_GUARD_SHIM_TRANSITIVE` | Expand uvx/npx deps for gate (default **on**; set `0` to disable) |
 | `PKG_GUARD_REAL_<TOOL>` | Absolute path to real `pip` / `npm` / `cargo` / … |
 | `RUST_LOG` | Tracing filter (`debug`, `info`, …) |
 

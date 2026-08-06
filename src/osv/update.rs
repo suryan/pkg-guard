@@ -33,7 +33,17 @@ pub struct EcoUpdateRow {
     pub advisory_count: usize,
     pub package_count: usize,
     pub ok: bool,
+    /// `downloaded` | `skipped_up_to_date` | `failed`
+    pub action: String,
     pub error: Option<String>,
+}
+
+/// Remote dump identity from HTTP headers.
+#[derive(Debug, Clone, Default)]
+pub struct RemoteDumpMeta {
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub content_length: Option<u64>,
 }
 
 /// Ecosystems we download by default.
@@ -65,7 +75,12 @@ fn http_client() -> Result<reqwest::Client> {
 }
 
 /// Download dumps for the given ecosystems (or defaults) and rebuild indexes.
-pub async fn update_osv(ecosystems: &[Ecosystem]) -> Result<OsvUpdateResult> {
+///
+/// When `force` is false, each ecosystem is **skipped** if a local index exists
+/// and a HTTP `HEAD` shows the remote dump is unchanged (`ETag` / `Last-Modified` /
+/// `Content-Length`).
+#[allow(clippy::too_many_lines)]
+pub async fn update_osv(ecosystems: &[Ecosystem], force: bool) -> Result<OsvUpdateResult> {
     let ecos: Vec<Ecosystem> = if ecosystems.is_empty() {
         default_ecosystems()
     } else {
@@ -74,25 +89,43 @@ pub async fn update_osv(ecosystems: &[Ecosystem]) -> Result<OsvUpdateResult> {
 
     let client = http_client()?;
     let mut rows = Vec::new();
-    let mut meta = OsvMeta {
+    // Preserve existing meta for ecosystems we skip
+    let mut meta = super::local::load_meta().unwrap_or(OsvMeta {
         updated_at: None,
         ecosystems: HashMap::new(),
         source: dump_base(),
-    };
+    });
+    meta.source = dump_base();
 
     let total_steps = ecos.len();
     eprintln!(
-        "pkg-guard osv update: {} ecosystem(s) → {}",
+        "pkg-guard osv update: {} ecosystem(s) → {}{}",
         total_steps,
-        super::local::osv_dir().display()
+        super::local::osv_dir().display(),
+        if force { " (force)" } else { "" }
     );
 
     for (i, eco) in ecos.iter().enumerate() {
         let osv_name = osv_ecosystem(*eco);
         let step = i + 1;
         eprintln!("[{step}/{total_steps}] {osv_name}");
-        match update_one(&client, osv_name).await {
-            Ok(index) => {
+        match update_one(&client, osv_name, force).await {
+            Ok(UpdateOneOutcome::Skipped { eco_meta }) => {
+                eprintln!(
+                    "  ✓ already up to date ({} advisories / {} packages) — skip download",
+                    eco_meta.advisory_count, eco_meta.package_count
+                );
+                rows.push(EcoUpdateRow {
+                    ecosystem: osv_name.to_string(),
+                    advisory_count: eco_meta.advisory_count,
+                    package_count: eco_meta.package_count,
+                    ok: true,
+                    action: "skipped_up_to_date".into(),
+                    error: None,
+                });
+                meta.ecosystems.insert(osv_name.to_string(), eco_meta);
+            }
+            Ok(UpdateOneOutcome::Downloaded { index, eco_meta }) => {
                 info!(
                     "OSV index {osv_name}: {} advisories across {} packages",
                     index.advisory_count, index.package_count
@@ -106,16 +139,10 @@ pub async fn update_osv(ecosystems: &[Ecosystem]) -> Result<OsvUpdateResult> {
                     advisory_count: index.advisory_count,
                     package_count: index.package_count,
                     ok: true,
+                    action: "downloaded".into(),
                     error: None,
                 });
-                meta.ecosystems.insert(
-                    osv_name.to_string(),
-                    EcoMeta {
-                        advisory_count: index.advisory_count,
-                        package_count: index.package_count,
-                        updated_at: Some(unix_now()),
-                    },
-                );
+                meta.ecosystems.insert(osv_name.to_string(), eco_meta);
             }
             Err(e) => {
                 warn!("OSV update failed for {osv_name}: {e}");
@@ -125,6 +152,7 @@ pub async fn update_osv(ecosystems: &[Ecosystem]) -> Result<OsvUpdateResult> {
                     advisory_count: 0,
                     package_count: 0,
                     ok: false,
+                    action: "failed".into(),
                     error: Some(e.to_string()),
                 });
             }
@@ -142,6 +170,12 @@ pub async fn update_osv(ecosystems: &[Ecosystem]) -> Result<OsvUpdateResult> {
         );
     }
 
+    let downloaded = rows.iter().filter(|r| r.action == "downloaded").count();
+    let skipped = rows
+        .iter()
+        .filter(|r| r.action == "skipped_up_to_date")
+        .count();
+
     meta.updated_at = Some(unix_now());
     save_meta(&meta)?;
     clear_memory_cache();
@@ -152,19 +186,207 @@ pub async fn update_osv(ecosystems: &[Ecosystem]) -> Result<OsvUpdateResult> {
         updated_at: meta.updated_at.clone().unwrap_or_default(),
         ecosystems: rows,
         message: format!(
-            "Updated local OSV index for {ok_count}/{} ecosystem(s). \
-             scan/audit will use local dumps (PKG_GUARD_OSV_MODE=auto|local).",
+            "OSV index: {downloaded} downloaded, {skipped} already up to date, \
+             {ok_count}/{} ok. scan/audit use local dumps when present \
+             (PKG_GUARD_OSV_MODE=auto|local).",
             ecos.len()
         ),
     })
 }
 
-async fn update_one(client: &reqwest::Client, osv_eco: &str) -> Result<EcosystemIndex> {
+/// Ensure local indexes exist / match remote for the given ecosystems.
+/// Soft-fails (logs) on network errors so scan can continue offline.
+pub async fn ensure_fresh(ecosystems: &[Ecosystem]) -> Result<OsvUpdateResult> {
+    update_osv(ecosystems, false).await
+}
+
+/// Whether auto-refresh should run before scan (default **on**).
+#[must_use]
+pub fn auto_update_enabled() -> bool {
+    match std::env::var("PKG_GUARD_OSV_AUTO_UPDATE")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "0" | "false" | "off" | "no" | "disable" | "disabled" => false,
+        _ => true, // default on (empty or "1"/"true")
+    }
+}
+
+/// Local status plus per-ecosystem remote freshness (`HEAD` vs stored `ETag`).
+pub async fn status_with_remote() -> serde_json::Value {
+    let mut base = super::local::status_snapshot();
+    let Some(meta) = super::local::load_meta() else {
+        if let Some(obj) = base.as_object_mut() {
+            obj.insert(
+                "remote_check".into(),
+                serde_json::json!({ "ok": false, "reason": "no local meta" }),
+            );
+        }
+        return base;
+    };
+
+    let client = match http_client() {
+        Ok(c) => c,
+        Err(e) => {
+            if let Some(obj) = base.as_object_mut() {
+                obj.insert(
+                    "remote_check".into(),
+                    serde_json::json!({ "ok": false, "error": e.to_string() }),
+                );
+            }
+            return base;
+        }
+    };
+
+    let mut rows = serde_json::Map::new();
+    for (eco_name, local_meta) in &meta.ecosystems {
+        let remote = head_dump_meta(&client, eco_name).await;
+        let entry = match remote {
+            Ok(r) => {
+                let up_to_date =
+                    is_remote_match(local_meta, &r) && super::local::has_index_str(eco_name);
+                serde_json::json!({
+                    "up_to_date": up_to_date,
+                    "local_etag": local_meta.etag,
+                    "remote_etag": r.etag,
+                    "local_last_modified": local_meta.last_modified,
+                    "remote_last_modified": r.last_modified,
+                    "local_content_length": local_meta.content_length,
+                    "remote_content_length": r.content_length,
+                    "advisory_count": local_meta.advisory_count,
+                    "package_count": local_meta.package_count,
+                })
+            }
+            Err(e) => serde_json::json!({
+                "up_to_date": null,
+                "error": e.to_string(),
+            }),
+        };
+        rows.insert(eco_name.clone(), entry);
+    }
+
+    if let Some(obj) = base.as_object_mut() {
+        obj.insert(
+            "remote_check".into(),
+            serde_json::json!({
+                "ok": true,
+                "ecosystems": rows,
+                "note": "up_to_date=true means HEAD matches stored ETag/Last-Modified; osv update will skip download",
+            }),
+        );
+    }
+    base
+}
+
+enum UpdateOneOutcome {
+    Skipped {
+        eco_meta: EcoMeta,
+    },
+    Downloaded {
+        index: EcosystemIndex,
+        eco_meta: EcoMeta,
+    },
+}
+
+/// True if local meta matches remote HEAD identity.
+#[must_use]
+pub fn is_remote_match(local: &EcoMeta, remote: &RemoteDumpMeta) -> bool {
+    // Prefer ETag
+    if let (Some(a), Some(b)) = (&local.etag, &remote.etag) {
+        if !a.is_empty() && a == b {
+            return true;
+        }
+    }
+    // Last-Modified exact match
+    if let (Some(a), Some(b)) = (&local.last_modified, &remote.last_modified) {
+        if !a.is_empty() && a == b {
+            return true;
+        }
+    }
+    // Length alone is weak; only treat as match if we also have matching last-modified
+    if let (Some(la), Some(lb)) = (local.content_length, remote.content_length) {
+        if la == lb && la > 0 {
+            if let (Some(a), Some(b)) = (&local.last_modified, &remote.last_modified) {
+                if a == b {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// HEAD the dump URL and parse freshness headers.
+pub async fn head_dump_meta(client: &reqwest::Client, osv_eco: &str) -> Result<RemoteDumpMeta> {
     let url = dump_url(osv_eco);
+    let response = client
+        .head(&url)
+        .send()
+        .await
+        .map_err(|e| anyhow!("HEAD failed: {e}"))?;
+    if !response.status().is_success() {
+        // Some hosts disallow HEAD — treat as unknown (must download)
+        return Ok(RemoteDumpMeta::default());
+    }
+    Ok(remote_meta_from_headers(
+        response.headers(),
+        response.content_length(),
+    ))
+}
+
+fn remote_meta_from_headers(
+    headers: &reqwest::header::HeaderMap,
+    content_length: Option<u64>,
+) -> RemoteDumpMeta {
+    let etag = headers
+        .get(reqwest::header::ETAG)
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    let last_modified = headers
+        .get(reqwest::header::LAST_MODIFIED)
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    RemoteDumpMeta {
+        etag,
+        last_modified,
+        content_length,
+    }
+}
+
+async fn update_one(
+    client: &reqwest::Client,
+    osv_eco: &str,
+    force: bool,
+) -> Result<UpdateOneOutcome> {
+    let url = dump_url(osv_eco);
+    let existing = super::local::load_meta().and_then(|m| m.ecosystems.get(osv_eco).cloned());
+
+    if !force {
+        if let Some(ref local_meta) = existing {
+            if super::local::has_index_str(osv_eco) {
+                match head_dump_meta(client, osv_eco).await {
+                    Ok(remote) if is_remote_match(local_meta, &remote) => {
+                        return Ok(UpdateOneOutcome::Skipped {
+                            eco_meta: local_meta.clone(),
+                        });
+                    }
+                    Ok(remote) => {
+                        eprintln!("  remote changed (etag/last-modified/size) — downloading…");
+                        let _ = remote;
+                    }
+                    Err(e) => {
+                        eprintln!("  HEAD check failed ({e}) — downloading…");
+                    }
+                }
+            }
+        }
+    }
+
     info!("Downloading OSV dump {url}");
     let started = Instant::now();
 
-    let bytes = download_with_progress(client, &url, osv_eco).await?;
+    let (bytes, remote_meta) = download_with_progress(client, &url, osv_eco).await?;
     info!(
         "Downloaded {osv_eco} dump ({} bytes) in {:.1}s",
         bytes.len(),
@@ -177,7 +399,20 @@ async fn update_one(client: &reqwest::Client, osv_eco: &str) -> Result<Ecosystem
     let index = build_index_from_zip(osv_eco, &bytes)?;
     eprintln!(" done in {:.1}s", index_started.elapsed().as_secs_f64());
     save_index(osv_eco, &index)?;
-    Ok(index)
+
+    let eco_meta = EcoMeta {
+        advisory_count: index.advisory_count,
+        package_count: index.package_count,
+        updated_at: Some(unix_now()),
+        etag: remote_meta.etag,
+        last_modified: remote_meta.last_modified,
+        content_length: remote_meta
+            .content_length
+            .or_else(|| u64::try_from(bytes.len()).ok()),
+        dump_url: Some(url),
+    };
+
+    Ok(UpdateOneOutcome::Downloaded { index, eco_meta })
 }
 
 /// Stream a URL into memory, printing download progress on stderr.
@@ -185,7 +420,7 @@ async fn download_with_progress(
     client: &reqwest::Client,
     url: &str,
     label: &str,
-) -> Result<Vec<u8>> {
+) -> Result<(Vec<u8>, RemoteDumpMeta)> {
     let mut response = client
         .get(url)
         .send()
@@ -195,7 +430,8 @@ async fn download_with_progress(
         return Err(anyhow!("HTTP {} for {url}", response.status()));
     }
 
-    let total = response.content_length();
+    let remote_meta = remote_meta_from_headers(response.headers(), response.content_length());
+    let total = remote_meta.content_length.or(response.content_length());
     let mut buf: Vec<u8> = match total.and_then(|n| usize::try_from(n).ok()) {
         Some(n) => Vec::with_capacity(n),
         None => Vec::with_capacity(1024 * 1024),
@@ -226,7 +462,12 @@ async fn download_with_progress(
     }
     print_download_progress(label, downloaded, total, started.elapsed());
     eprintln!(); // finish the \r line
-    Ok(buf)
+
+    let mut meta = remote_meta;
+    if meta.content_length.is_none() {
+        meta.content_length = Some(downloaded);
+    }
+    Ok((buf, meta))
 }
 
 fn print_download_progress(label: &str, downloaded: u64, total: Option<u64>, elapsed: Duration) {
@@ -570,6 +811,75 @@ mod tests {
         assert!(dump_url("crates.io").contains("crates.io"));
     }
 
+    #[test]
+    fn test_is_remote_match_etag() {
+        let local = EcoMeta {
+            etag: Some("\"abc\"".into()),
+            last_modified: Some("Mon, 01 Jan 2024 00:00:00 GMT".into()),
+            content_length: Some(100),
+            ..Default::default()
+        };
+        let remote = RemoteDumpMeta {
+            etag: Some("\"abc\"".into()),
+            last_modified: Some("Tue, 02 Jan 2024 00:00:00 GMT".into()),
+            content_length: Some(999),
+        };
+        assert!(is_remote_match(&local, &remote));
+        let remote2 = RemoteDumpMeta {
+            etag: Some("\"other\"".into()),
+            last_modified: local.last_modified.clone(),
+            content_length: Some(100),
+        };
+        assert!(is_remote_match(&local, &remote2)); // last-modified match
+        let remote3 = RemoteDumpMeta {
+            etag: Some("\"x\"".into()),
+            last_modified: Some("different".into()),
+            content_length: Some(1),
+        };
+        assert!(!is_remote_match(&local, &remote3));
+    }
+
+    #[test]
+    fn test_auto_update_enabled() {
+        std::env::remove_var("PKG_GUARD_OSV_AUTO_UPDATE");
+        assert!(auto_update_enabled());
+        std::env::set_var("PKG_GUARD_OSV_AUTO_UPDATE", "0");
+        assert!(!auto_update_enabled());
+        std::env::set_var("PKG_GUARD_OSV_AUTO_UPDATE", "false");
+        assert!(!auto_update_enabled());
+        std::env::set_var("PKG_GUARD_OSV_AUTO_UPDATE", "1");
+        assert!(auto_update_enabled());
+        std::env::remove_var("PKG_GUARD_OSV_AUTO_UPDATE");
+    }
+
+    #[test]
+    fn test_remote_meta_from_headers() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::ETAG, "\"xyz\"".parse().unwrap());
+        headers.insert(
+            reqwest::header::LAST_MODIFIED,
+            "Wed, 01 Jan 2025 00:00:00 GMT".parse().unwrap(),
+        );
+        let m = remote_meta_from_headers(&headers, Some(42));
+        assert_eq!(m.etag.as_deref(), Some("\"xyz\""));
+        assert_eq!(m.content_length, Some(42));
+        assert!(m.last_modified.is_some());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_status_with_remote_no_panic() {
+        // Isolate from other serial tests that rewrite PKG_GUARD_CACHE_DIR
+        let prev = std::env::var("PKG_GUARD_CACHE_DIR").ok();
+        std::env::remove_var("PKG_GUARD_CACHE_DIR");
+        let v = status_with_remote().await;
+        assert!(v.get("osv_dir").is_some());
+        assert!(v.get("remote_check").is_some() || v.get("exists").is_some());
+        if let Some(p) = prev {
+            std::env::set_var("PKG_GUARD_CACHE_DIR", p);
+        }
+    }
+
     #[tokio::test]
     #[serial_test::serial]
     async fn test_update_osv_from_local_http_zip() {
@@ -627,7 +937,7 @@ mod tests {
         );
         super::super::local::clear_memory_cache();
 
-        let result = update_osv(&[Ecosystem::Python]).await;
+        let result = update_osv(&[Ecosystem::Python], true).await;
         assert!(result.is_ok(), "{result:?}");
         let result = result.unwrap();
         assert!(result.ecosystems.iter().any(|e| e.ok));
@@ -635,7 +945,7 @@ mod tests {
 
         // all fail path
         std::env::set_var("PKG_GUARD_OSV_DUMP_BASE", "http://127.0.0.1:1");
-        let fail = update_osv(&[Ecosystem::Cargo]).await;
+        let fail = update_osv(&[Ecosystem::Cargo], true).await;
         assert!(fail.is_err());
 
         std::env::remove_var("PKG_GUARD_OSV_DUMP_BASE");

@@ -114,8 +114,11 @@ enum OsvCmd {
         /// Comma-separated ecosystems: python,npm,java,cargo (default: all)
         #[arg(long, short = 'e')]
         ecosystems: Option<String>,
+        /// Re-download even if remote dump is unchanged (`ETag` / `Last-Modified`)
+        #[arg(long)]
+        force: bool,
     },
-    /// Show local dump status and lookup mode
+    /// Show local dump status and lookup mode (includes remote freshness HEAD checks)
     Status,
 }
 
@@ -230,7 +233,7 @@ async fn main() -> anyhow::Result<()> {
             let result = data::update_db::update_db(&feeds).await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
             if osv {
-                let osv_result = osv::update_osv(&[]).await?;
+                let osv_result = osv::update_osv(&[], false).await?;
                 println!("{}", serde_json::to_string_pretty(&osv_result)?);
             }
         }
@@ -243,13 +246,16 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run_osv_cmd(action: OsvCmd) -> anyhow::Result<()> {
     match action {
-        OsvCmd::Update { ecosystems } => {
+        OsvCmd::Update { ecosystems, force } => {
             let ecos = parse_ecosystem_list(ecosystems.as_deref())?;
-            let result = osv::update_osv(&ecos).await?;
+            let result = osv::update_osv(&ecos, force).await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         OsvCmd::Status => {
-            println!("{}", serde_json::to_string_pretty(&osv::status_snapshot())?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&osv::status_with_remote().await)?
+            );
         }
     }
     Ok(())

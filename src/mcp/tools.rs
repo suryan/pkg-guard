@@ -245,8 +245,9 @@ fn osv_update_tool() -> ToolDefinition {
     ToolDefinition {
         name: "osv_update".to_string(),
         description: "Download OSV.dev ecosystem dumps (PyPI/npm/Maven/crates.io) from the public \
-            GCS bucket and build a local package→advisory index for offline scanning. \
-            Large ecosystems (npm) may take several minutes and ~200MB+ download."
+            GCS bucket and build a local package→advisory index. Skips ecosystems that are already \
+            up to date (HEAD ETag/Last-Modified match) unless force=true. Large ecosystems (npm) \
+            may take several minutes on first download."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -258,6 +259,11 @@ fn osv_update_tool() -> ToolDefinition {
                         "enum": ["python", "npm", "java", "cargo"]
                     },
                     "description": "Ecosystems to download (default: all four)"
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "Re-download even if remote dump is unchanged (default: false)",
+                    "default": false
                 }
             },
             "required": []

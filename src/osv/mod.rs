@@ -16,7 +16,7 @@ mod update;
 mod version;
 
 pub use local::{has_index, status_snapshot};
-pub use update::update_osv;
+pub use update::{auto_update_enabled, ensure_fresh, status_with_remote, update_osv};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -333,6 +333,26 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial]
+    async fn test_query_online_mode_hits_api() {
+        std::env::set_var("PKG_GUARD_OSV_MODE", "online");
+        let r = query_package(Ecosystem::Python, "six", "1.16.0")
+            .await
+            .expect("online query");
+        assert_eq!(r.source.as_deref(), Some("online"));
+        let batch = query_batch(&[(
+            Ecosystem::Cargo,
+            "serde".into(),
+            "1.0.200".into(),
+        )])
+        .await
+        .expect("online batch");
+        assert!(!batch.is_empty());
+        assert_eq!(batch[0].source.as_deref(), Some("online"));
+        std::env::remove_var("PKG_GUARD_OSV_MODE");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
     async fn test_query_prefers_local_in_auto() {
         use local::{
             clear_memory_cache, save_index, save_meta, EcoMeta, EcosystemIndex, IndexedAdvisory,
@@ -395,6 +415,7 @@ mod tests {
                 advisory_count: 2,
                 package_count: 2,
                 updated_at: meta.updated_at.clone(),
+                ..Default::default()
             },
         );
         save_meta(&meta).unwrap();

@@ -24,6 +24,7 @@ pub(crate) mod gate;
 pub(crate) mod npm;
 pub(crate) mod pip;
 pub(crate) mod resolve;
+pub(crate) mod transitive;
 pub(crate) mod uvx;
 
 use std::env;

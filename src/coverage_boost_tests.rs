@@ -279,6 +279,8 @@ async fn shim_gate_warn_mode_on_blocklist() {
     .unwrap();
     std::env::set_var("PKG_GUARD_BLOCKLIST", &bl);
     std::env::set_var("PKG_GUARD_CACHE_DIR", &dir);
+    // Avoid network transitive expand in this unit test
+    std::env::set_var("PKG_GUARD_SHIM_TRANSITIVE", "0");
     custom_blocklist::reload();
     feed_cache::reload();
 
@@ -293,10 +295,14 @@ async fn shim_gate_warn_mode_on_blocklist() {
     )
     .await
     .unwrap();
-    assert!(matches!(d, crate::shim::gate::Decision::Warn(_)));
+    assert!(
+        matches!(d, crate::shim::gate::Decision::Warn(_)),
+        "unexpected: {d:?}"
+    );
 
     std::env::remove_var("PKG_GUARD_BLOCKLIST");
     std::env::remove_var("PKG_GUARD_CACHE_DIR");
+    std::env::remove_var("PKG_GUARD_SHIM_TRANSITIVE");
     custom_blocklist::reload();
     feed_cache::reload();
     let _ = fs::remove_dir_all(&dir);

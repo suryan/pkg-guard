@@ -133,6 +133,41 @@ pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
         return Ok(result);
     }
 
+    // Prefer latest local dumps when possible (HEAD skip if already current).
+    if matches!(
+        osv_mode,
+        crate::osv::OsvMode::Auto | crate::osv::OsvMode::Local
+    ) && crate::osv::auto_update_enabled()
+    {
+        let mut ecos: Vec<crate::data::Ecosystem> = packages.iter().map(|(e, _, _)| *e).collect();
+        ecos.sort_by_key(|e| format!("{e}"));
+        ecos.dedup();
+        match crate::osv::ensure_fresh(&ecos).await {
+            Ok(upd) => {
+                let skipped = upd
+                    .ecosystems
+                    .iter()
+                    .filter(|r| r.action == "skipped_up_to_date")
+                    .count();
+                let downloaded = upd
+                    .ecosystems
+                    .iter()
+                    .filter(|r| r.action == "downloaded")
+                    .count();
+                if downloaded > 0 || skipped > 0 {
+                    eprintln!(
+                        "pkg-guard scan: OSV dumps refreshed (downloaded={downloaded}, already_latest={skipped})"
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "pkg-guard scan: OSV auto-update skipped ({e}); using existing index/API"
+                );
+            }
+        }
+    }
+
     match crate::osv::query_batch(&packages).await {
         Ok(batch) => {
             let backend = batch

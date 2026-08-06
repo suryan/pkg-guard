@@ -73,6 +73,18 @@ pub struct EcoMeta {
     pub advisory_count: usize,
     pub package_count: usize,
     pub updated_at: Option<String>,
+    /// HTTP `ETag` from the dump zip (for skip-if-fresh).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
+    /// HTTP `Last-Modified` from the dump zip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
+    /// `Content-Length` of the dump zip when last downloaded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_length: Option<u64>,
+    /// Dump URL that was fetched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dump_url: Option<String>,
 }
 
 fn cache_root() -> PathBuf {
@@ -125,7 +137,13 @@ pub fn save_index(eco: &str, index: &EcosystemIndex) -> Result<PathBuf> {
 /// True if local index exists for ecosystem.
 #[must_use]
 pub fn has_index(eco: Ecosystem) -> bool {
-    index_path(osv_ecosystem(eco)).is_file()
+    has_index_str(osv_ecosystem(eco))
+}
+
+/// True if local index file exists for an OSV ecosystem name (`PyPI`, `npm`, …).
+#[must_use]
+pub fn has_index_str(osv_eco: &str) -> bool {
+    index_path(osv_eco).is_file()
 }
 
 /// Age of local dump in days (from `meta.updated_at` `unix:N` or file mtime).
@@ -163,7 +181,7 @@ pub fn is_stale() -> bool {
     }
 }
 
-/// Diagnostics for CLI / MCP.
+/// Diagnostics for CLI / MCP (local state only — no network).
 #[must_use]
 pub fn status_snapshot() -> serde_json::Value {
     let meta = load_meta();
@@ -174,11 +192,13 @@ pub fn status_snapshot() -> serde_json::Value {
         "stale": is_stale(),
         "age_days": age_days(),
         "max_age_days": MAX_OSV_AGE_DAYS,
+        "auto_update": super::update::auto_update_enabled(),
         "mode": format!("{:?}", super::OsvMode::from_env()).to_ascii_lowercase(),
         "mode_env": "PKG_GUARD_OSV_MODE=auto|local|online",
         "meta": meta,
         "hints": [
-            "Download dumps: pkg-guard osv update",
+            "Download dumps: pkg-guard osv update  (skips if already latest; --force to redownload)",
+            "Scan auto-refreshes dumps when PKG_GUARD_OSV_AUTO_UPDATE is on (default)",
             "Per-ecosystem zips from https://storage.googleapis.com/osv-vulnerabilities/<ECOSYSTEM>/all.zip",
             "auto mode uses local index when present; falls back to api.osv.dev",
         ],
@@ -407,6 +427,7 @@ mod tests {
                 advisory_count: 1,
                 package_count: 1,
                 updated_at: Some("unix:1".into()),
+                ..Default::default()
             },
         );
         save_meta(&meta).unwrap();

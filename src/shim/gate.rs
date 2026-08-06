@@ -45,7 +45,28 @@ async fn check_packages(
     blocks: &mut Vec<String>,
     warnings: &mut Vec<String>,
 ) {
-    for pkg in packages {
+    let mut expanded = packages.to_vec();
+    if super::transitive::transitive_enabled()
+        && matches!(ecosystem, Ecosystem::Python | Ecosystem::Npm)
+        && !packages.is_empty()
+    {
+        match super::transitive::expand_with_transitive(ecosystem, packages).await {
+            Ok(deps) if deps.len() > packages.len() => {
+                eprintln!(
+                    "pkg-guard shim: expanded {} top-level package(s) → {} with transitive deps (depth≤3, max 80)",
+                    packages.len(),
+                    deps.len()
+                );
+                expanded = deps;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warnings.push(format!("transitive resolve incomplete: {e}"));
+            }
+        }
+    }
+
+    for pkg in &expanded {
         let check = typosquat::check_typosquat(ecosystem, &pkg.name);
         if check.is_blocklisted {
             blocks.push(format!(
@@ -55,7 +76,8 @@ async fn check_packages(
             ));
             continue;
         }
-        if check.is_suspicious {
+        // Typosquat warnings only for top-level packages (noise on deep deps)
+        if packages.iter().any(|p| p.name == pkg.name) && check.is_suspicious {
             warnings.push(format!(
                 "{} looks like typosquat of {:?}",
                 pkg.name, check.similar_to
@@ -254,5 +276,38 @@ mod tests {
         .await
         .unwrap();
         assert!(matches!(d, Decision::Allow | Decision::Warn(_)));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_evaluate_with_transitive_expand() {
+        std::env::set_var("PKG_GUARD_SHIM_TRANSITIVE", "1");
+        // requests has several runtime deps — exercises expand + OSV on tree
+        let d = evaluate(
+            Ecosystem::Python,
+            &[PackageRef {
+                name: "requests".into(),
+                version: Some("2.31.0".into()),
+            }],
+            &[],
+            ShimMode::Warn,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(d, Decision::Allow | Decision::Warn(_)));
+
+        let d2 = evaluate(
+            Ecosystem::Npm,
+            &[PackageRef {
+                name: "left-pad".into(),
+                version: Some("1.3.0".into()),
+            }],
+            &[],
+            ShimMode::Warn,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(d2, Decision::Allow | Decision::Warn(_)));
+        std::env::remove_var("PKG_GUARD_SHIM_TRANSITIVE");
     }
 }

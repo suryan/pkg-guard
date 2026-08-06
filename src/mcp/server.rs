@@ -116,7 +116,7 @@ async fn handle_tool_call(params: &Value) -> ToolCallResult {
         "audit_project" => handle_audit_project(&arguments),
         "blocklist_status" => handle_blocklist_status(),
         "update_db" => handle_update_db(&arguments).await,
-        "osv_status" => handle_osv_status(),
+        "osv_status" => handle_osv_status().await,
         "osv_update" => handle_osv_update(&arguments).await,
         _ => ToolCallResult::error(format!("Unknown tool: {tool_name}")),
     }
@@ -537,9 +537,9 @@ mod tests {
         assert!(resp.result.is_some());
     }
 
-    #[test]
-    fn handle_osv_status_ok() {
-        let r = handle_osv_status();
+    #[tokio::test]
+    async fn handle_osv_status_ok() {
+        let r = handle_osv_status().await;
         assert!(r.is_error.is_none());
     }
 
@@ -581,7 +581,7 @@ async fn handle_update_db(args: &Value) -> ToolCallResult {
     match data::update_db::update_db(&feeds).await {
         Ok(result) => {
             if also_osv {
-                match osv::update_osv(&[]).await {
+                match osv::update_osv(&[], false).await {
                     Ok(osv_result) => {
                         let combined = serde_json::json!({
                             "feeds": result,
@@ -603,8 +603,8 @@ async fn handle_update_db(args: &Value) -> ToolCallResult {
     }
 }
 
-fn handle_osv_status() -> ToolCallResult {
-    match serde_json::to_string_pretty(&osv::status_snapshot()) {
+async fn handle_osv_status() -> ToolCallResult {
+    match serde_json::to_string_pretty(&osv::status_with_remote().await) {
         Ok(json) => ToolCallResult::text(json),
         Err(e) => ToolCallResult::error(format!("Failed to serialize OSV status: {e}")),
     }
@@ -623,7 +623,8 @@ async fn handle_osv_update(args: &Value) -> ToolCallResult {
             }
         }
     }
-    match osv::update_osv(&ecos).await {
+    let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
+    match osv::update_osv(&ecos, force).await {
         Ok(result) => {
             let json = serde_json::to_string_pretty(&result).unwrap_or_default();
             ToolCallResult::text(json)
