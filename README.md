@@ -50,11 +50,13 @@ pkg-guard update-db --feed https://example.com/blocklist.json
 # Start as MCP server (for IDE integration)
 pkg-guard serve
 
-# Transparent PM shims (dedicated dir first on PATH; leave real tools in place)
-pkg-guard shim install
-# → ~/.local/share/pkg-guard/shims  (not ~/.local/bin)
+# Transparent PM shims — see docs/usage.md "Best setup (recommended)"
+make install
+pkg-guard shim install            # → ~/.local/share/pkg-guard/shims  (not ~/.local/bin)
+# Leave real uv/uvx/npx where installers put them. Put shims FIRST on PATH:
 export PATH="$HOME/.local/share/pkg-guard/shims:$PATH"
-pkg-guard shim status
+# Persist via ~/.config/pkg-guard/shim.env + source from bashrc *and* profile
+pkg-guard shim status             # which -a uvx → shim first, real second
 # PKG_GUARD_SHIM_MODE=enforce|warn|off
 ```
 
@@ -195,6 +197,8 @@ scripts/precommit.sh # Quality gate (90% line coverage)
 ```
 
 Also: `pkg-guard shim install|status|uninstall` for PATH-level install gates.
+**Best layout:** dedicated shim dir first on `PATH`; never overwrite real tools in
+`~/.local/bin`. Full guide: [docs/usage.md](docs/usage.md#best-setup-recommended).
 
 ## License
 

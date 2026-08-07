@@ -196,11 +196,12 @@ Transitive resolve walks the full runtime tree (cycle-safe). Not a full solver
 
 **Practical controls**
 
-1. Install shims so `uvx`/`npx` on `PATH` hit pkg-guard first  
+1. Follow **[Best setup](#best-setup-recommended)** (shim dir first on PATH; leave reals in place)  
 2. **Pin versions** in MCP config (`pkg==1.2.3`, `pkg@1.2.3`) so OSV can match  
 3. Keep **local OSV dumps** fresh (scan auto-refreshes; or `pkg-guard osv update`)  
 4. Prefer custom/feed **blocklists** for known-bad names  
 5. For high-trust MCP tools, prefer a **vendored/binary** install over floating `uvx`/`npx`  
+6. MCP hosts: set PATH in the server env (do not assume bashrc)  
 
 ### Issues with transparent calls (and mitigations)
 
@@ -213,50 +214,161 @@ Transitive resolve walks the full runtime tree (cycle-safe). Not a full solver
 | Incomplete CLI parsing | Common install/run forms gated; exotic URLs/paths pass through or skip |
 | Slow gates | Blocklist + OSV when version known; **no** Docker audit on every install |
 
-### Install shims
+### Best setup (recommended)
 
-**Layout:** shims live in a **dedicated directory early on `PATH`**. Real
-`uv` / `uvx` / `npx` / `pip` stay where their installers put them. Do **not**
-move reals into a pkg-guard tree (that freezes upgrades and collides with
-official installers).
+**Rule:** put shims in a **dedicated directory that is first on `PATH`**.
+Leave real package managers where their installers put them. Do **not** move,
+copy, or rename real `uv` / `uvx` / `npx` / `pip` into a pkg-guard tree.
 
 ```text
-PATH: ~/.local/share/pkg-guard/shims  →  ~/.local/bin  →  nvm / cargo / …
-        uv → pkg-guard                  real uv (updater-owned)
-        npx → pkg-guard                 real npx
+PATH order (left = first):
+
+  ~/.local/share/pkg-guard/shims/     ← pkg-guard owns this
+      uv  →  ~/.local/bin/pkg-guard
+      uvx →  ~/.local/bin/pkg-guard
+      npx →  ~/.local/bin/pkg-guard
+      pip →  ~/.local/bin/pkg-guard
+      …
+
+  ~/.local/bin/                       ← real uv / uvx (self-update OK)
+  ~/.nvm/.../bin/                     ← real npx / npm
+  ~/.cargo/bin/                       ← real cargo
+  …
 ```
 
+How a call works:
+
+1. Shell finds `uvx` in the **shim dir** → runs `pkg-guard`
+2. pkg-guard applies policy (blocklist, OSV, optional transitive expand)
+3. Resolver walks `PATH`, **skips** any pkg-guard shim, finds the **real** tool
+4. `exec` real tool with the original args
+
+#### Why not put shims in `~/.local/bin`?
+
+`uv` / `uvx` also install into `~/.local/bin`. One directory can only have one
+file named `uv`. Installing a shim there **overwrites** the real binary (or
+forces you to relocate it, which freezes upgrades). A separate shim directory
+avoids that.
+
+#### Step-by-step
+
 ```bash
-cargo build --release   # or: make install
-pkg-guard shim install  # default: ~/.local/share/pkg-guard/shims
-# put shims FIRST (shell profile):
-export PATH="$HOME/.local/share/pkg-guard/shims:$PATH"
-# MCP/IDE hosts often skip bashrc — set the same PATH there
+# 1) Install the pkg-guard binary (normal location is fine)
+make install
+# → ~/.local/bin/pkg-guard
+
+# 2) Create multicall shims in the dedicated dir (default path)
+pkg-guard shim install
+# → ~/.local/share/pkg-guard/shims/{pip,pip3,npm,npx,uvx,uv,cargo}
+# override dir:  pkg-guard shim install -d /path/to/shims
+# subset:        pkg-guard shim install --tools uvx,uv,npx
+
+# 3) Put the shim dir FIRST on PATH — use a small env file you can share
+mkdir -p ~/.config/pkg-guard
+cat > ~/.config/pkg-guard/shim.env <<'EOF'
+# pkg-guard shims first; leave real tools where installers put them
+export PATH="${HOME}/.local/share/pkg-guard/shims:${PATH}"
+export PKG_GUARD_SHIM_MODE="${PKG_GUARD_SHIM_MODE:-enforce}"
+EOF
+
+# 4) Load it from interactive shells (bashrc)
+echo '[ -f "$HOME/.config/pkg-guard/shim.env" ] && . "$HOME/.config/pkg-guard/shim.env"' \
+  >> ~/.bashrc
+
+# 5) Login shells often prepend ~/.local/bin *after* bashrc — source again last
+#    so shims stay first (Debian/Ubuntu ~/.profile does this):
+echo '[ -f "$HOME/.config/pkg-guard/shim.env" ] && . "$HOME/.config/pkg-guard/shim.env"' \
+  >> ~/.profile
+
+# 6) New shell (or: source ~/.config/pkg-guard/shim.env)
+# 7) Verify
 pkg-guard shim status
-
-# Modes
-export PKG_GUARD_SHIM_MODE=enforce   # default: block bad installs / bad MCP packages
-export PKG_GUARD_SHIM_MODE=warn      # print warning, still run
-export PKG_GUARD_SHIM_MODE=off       # fully transparent
-
-# Optional: only if PATH lookup fails (prefer PATH order instead)
-# export PKG_GUARD_REAL_PIP=/usr/bin/pip3
-# export PKG_GUARD_REAL_UVX=$HOME/.local/bin/uvx
+which -a uv uvx npx
+# first hit for each should be .../pkg-guard/shims/...
+# second hit should be the real tool
 ```
 
-Do **not** install shims into `~/.local/bin` if that is also where `uv`/`uvx`
-live — one name per directory; the real would be overwritten.
+#### MCP / IDE hosts
 
-Then:
+GUI apps and MCP launchers often **do not** load `~/.bashrc` or `~/.profile`.
+Give them the same env explicitly, for example:
+
+```json
+{
+  "env": {
+    "PATH": "/home/YOU/.local/share/pkg-guard/shims:/home/YOU/.local/bin:/usr/bin",
+    "PKG_GUARD_SHIM_MODE": "enforce"
+  }
+}
+```
+
+Or start the host from a shell that already sourced `shim.env`. If MCP
+config uses an **absolute** path to real `uvx`/`npx`, the gate is skipped —
+prefer the bare command name so `PATH` resolves the shim.
+
+#### Modes
+
+| Mode | Env | Behavior |
+|------|-----|----------|
+| **enforce** (default) | `PKG_GUARD_SHIM_MODE=enforce` | Block policy failures (exit 2) |
+| **warn** | `PKG_GUARD_SHIM_MODE=warn` | Print warning, still run real tool |
+| **off** | `PKG_GUARD_SHIM_MODE=off` | Fully transparent (no checks) |
+
+#### Optional overrides (usually unnecessary)
+
+Only if PATH lookup fails (exotic layouts, missing real on PATH):
 
 ```bash
+export PKG_GUARD_REAL_UVX=$HOME/.local/bin/uvx
+export PKG_GUARD_REAL_NPX=$HOME/.nvm/versions/node/v20.19.2/bin/npx
+# or any: PKG_GUARD_REAL_<TOOL>=/absolute/path
+```
+
+Prefer fixing PATH order over pinning `REAL_*` — pinned paths go stale when
+you upgrade Node / move installs.
+
+#### After `uv` / Node updates
+
+- Official `uv` installers and `uv self update` rewrite **`~/.local/bin`** —
+  that is fine; shims are elsewhere.
+- nvm / new Node: real `npx` moves under a new version dir; as long as that
+  dir is still on PATH after the shim dir, resolution still works.
+- If an installer ever drops files into the **shim** dir, re-run
+  `pkg-guard shim install`.
+- Health check anytime: `pkg-guard shim status` and `which -a uvx`.
+
+#### Anti-patterns (avoid)
+
+| Don't | Why |
+|-------|-----|
+| `shim install --dir ~/.local/bin` when uv lives there | Overwrites real `uv`/`uvx` |
+| Move reals into `~/.local/lib/pkg-guard/real/` | Freezes upgrades; not needed |
+| Rely only on bashrc for MCP | Hosts often skip shell profiles |
+| Absolute `/path/to/real/uvx` in MCP config | Bypasses the gate |
+| `PKG_GUARD_REAL_*` as the primary mechanism | PATH order is the design |
+
+#### Smoke tests
+
+```bash
+# Pass-through (no package gate)
+uv --version
+uvx --help
+npx --version
+
+# Gated package runs (blocklist + OSV when versioned; may expand transitive deps)
+uvx ruff==0.9.0 --version
+npx -y cowsay@1.5.0 --version
+
 pip install requests==2.31.0     # gated, then real pip
-pip install reqeusts             # BLOCKED if on feed/custom blocklist
-npm install lodash@4.17.21
-npx -y left-pad@1.3.0            # gated (top-level)
-uvx mcp-atlassian==0.23.0        # gated (top-level MCP package)
-cargo add serde@1.0
-pip list                         # pass-through, no gate
+pip list                         # pass-through
+```
+
+#### Uninstall shims
+
+```bash
+pkg-guard shim uninstall          # removes default dir links only
+# real uv/npx/pip are untouched
+# remove PATH line from bashrc/profile/shim.env when done
 ```
 
 ## CLI Usage
@@ -589,9 +701,10 @@ fi
 | `PKG_GUARD_OSV_MODE` | `auto` \| `local` \| `online` (OSV lookup) |
 | `PKG_GUARD_OSV_AUTO_UPDATE` | On scan, refresh dumps if remote changed (default **on**; set `0` to disable) |
 | `PKG_GUARD_OSV_DUMP_BASE` | Mirror base for OSV zips (default Google GCS bucket) |
-| `PKG_GUARD_SHIM_MODE` | `enforce` \| `warn` \| `off` |
+| `PKG_GUARD_SHIM_MODE` | `enforce` \| `warn` \| `off` (default enforce) |
+| `PKG_GUARD_SHIM_DIR` | Default dir for `shim install` (`~/.local/share/pkg-guard/shims`) |
 | `PKG_GUARD_SHIM_TRANSITIVE` | Expand uvx/npx deps for gate (default **on**; set `0` to disable) |
-| `PKG_GUARD_REAL_<TOOL>` | Absolute path to real `pip` / `npm` / `cargo` / … |
+| `PKG_GUARD_REAL_<TOOL>` | Optional absolute path to real tool; prefer PATH order instead |
 | `RUST_LOG` | Tracing filter (`debug`, `info`, …) |
 
 ## Troubleshooting
@@ -607,6 +720,26 @@ Local OSV index missing for crates.io … Run: pkg-guard osv update
 ```
 
 With `PKG_GUARD_OSV_MODE=local`, update dumps first. With `auto`, the tool falls back to the live API when the index is missing.
+
+### Shims not gating / real tool runs first
+
+```bash
+which -a uvx
+# Bad:  first line is ~/.local/bin/uvx  (or nvm) with no shim ahead
+# Good: first line is ~/.local/share/pkg-guard/shims/uvx
+```
+
+1. Confirm shims exist: `ls ~/.local/share/pkg-guard/shims`
+2. Prepend shim dir on PATH (source `~/.config/pkg-guard/shim.env`)
+3. If login shell still puts `~/.local/bin` first, source `shim.env` **last** in `~/.profile`
+4. MCP/IDE: set PATH in the host env (they often skip bashrc)
+5. `pkg-guard shim status` — each tool should show `real_binary` and `shim_present: true`
+
+### could not find real 'uvx' on PATH
+
+Shim ran but no second `uvx` exists after skipping shims. Install real `uv`
+(normal location), ensure its directory is on PATH **after** the shim dir, or
+set `PKG_GUARD_REAL_UVX` temporarily.
 
 ### OSV dump looks stale
 
