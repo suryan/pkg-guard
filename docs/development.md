@@ -222,7 +222,8 @@ against legitimate package names.
 | `PKG_GUARD_CACHE_DIR` | Override feed cache directory (default `~/.cache/pkg-guard`) |
 | `PKG_GUARD_MIN_COVERAGE` | Precommit line-coverage floor (default **90**) |
 | `PKG_GUARD_SHIM_MODE` | Shim policy: `enforce` (default), `warn`, or `off` |
-| `PKG_GUARD_REAL_<TOOL>` | Absolute path to real package manager (avoids shim recursion) |
+| `PKG_GUARD_SHIM_DIR` | Override default shim install dir (`~/.local/share/pkg-guard/shims`) |
+| `PKG_GUARD_REAL_<TOOL>` | Optional absolute path to real PM (prefer PATH order: shim dir first) |
 | `PKG_GUARD_OSV_MODE` | OSV lookup: `auto` (local dump if present, else API), `local`, `online` |
 | `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` | Standard XDG roots for config/cache |
 

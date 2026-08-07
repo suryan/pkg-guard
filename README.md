@@ -50,8 +50,10 @@ pkg-guard update-db --feed https://example.com/blocklist.json
 # Start as MCP server (for IDE integration)
 pkg-guard serve
 
-# Transparent PM shims (looks like pip/npm/cargo, gates installs)
-pkg-guard shim install --dir ~/.local/bin
+# Transparent PM shims (dedicated dir first on PATH; leave real tools in place)
+pkg-guard shim install
+# → ~/.local/share/pkg-guard/shims  (not ~/.local/bin)
+export PATH="$HOME/.local/share/pkg-guard/shims:$PATH"
 pkg-guard shim status
 # PKG_GUARD_SHIM_MODE=enforce|warn|off
 ```

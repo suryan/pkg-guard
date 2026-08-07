@@ -4,20 +4,35 @@
 //! (symlink or copy), it intercepts install-like / package-run commands, runs
 //! policy checks, then `exec`s the real tool.
 //!
+//! ## Layout (recommended)
+//!
+//! Put shims in a **dedicated directory early on PATH** (default
+//! `~/.local/share/pkg-guard/shims`). Leave real `uv` / `uvx` / `npx` / `pip`
+//! in their normal install locations. Do **not** move or copy reals into a
+//! `pkg-guard` tree — updaters keep working, and the resolver walks PATH past
+//! any shim that points at `pkg-guard`.
+//!
+//! ```text
+//! PATH: ~/.local/share/pkg-guard/shims  →  ~/.local/bin  →  nvm  →  …
+//!         uv → pkg-guard                  real uv
+//!         uvx → pkg-guard                 real uvx
+//!         npx → pkg-guard                 real npx (nvm)
+//! ```
+//!
 //! **MCP note:** many MCP servers start via `uvx pkg==…` or `npx -y pkg@…`.
-//! Those pull the named package **and** transitive deps. Shims gate the
-//! top-level package (blocklist + OSV when versioned); they do not fully
-//! resolve the dependency tree before exec.
+//! Those pull the named package **and** transitive deps. Shims gate named
+//! packages plus transitive deps when enabled (blocklist + OSV when versioned).
 //!
 //! ## Known limitations (transparent calls are never perfect)
 //! - Bypass via absolute path (`/usr/bin/pip`) or clearing PATH
 //! - Incomplete coverage of exotic install forms (git URLs, local paths)
-//! - Transitive deps of `uvx`/`npx` are not fully audited before launch
+//! - Complex extras / version ranges may be incomplete in transitive walk
 //! - Recursion risk if the "real" binary is not resolved correctly
 //! - Container `audit` is **not** run by default (too slow for every install)
+//! - GUI/MCP hosts may not load bashrc — set the same PATH prepend there
 //!
-//! Mitigations: resolve real binaries by skipping self; env overrides
-//! `PKG_GUARD_REAL_<TOOL>`; `PKG_GUARD_SHIM_MODE=off|warn|enforce` (default enforce).
+//! Mitigations: PATH order + skip self/shims; optional `PKG_GUARD_REAL_<TOOL>`;
+//! `PKG_GUARD_SHIM_MODE=off|warn|enforce` (default enforce).
 
 pub(crate) mod cargo;
 pub(crate) mod gate;
@@ -209,15 +224,42 @@ pub fn install_shims(dir: &Path, tools: &[String]) -> Result<Vec<PathBuf>> {
     Ok(created)
 }
 
+/// Default directory for multicall shims (XDG data, not `~/.local/bin`).
+///
+/// Keeping shims out of the real-tool install dir avoids clobbering `uv`/`uvx`
+/// and lets updaters rewrite reals in place.
+#[must_use]
+pub fn default_shim_dir() -> PathBuf {
+    if let Ok(dir) = env::var("PKG_GUARD_SHIM_DIR") {
+        return PathBuf::from(dir);
+    }
+    if let Ok(xdg) = env::var("XDG_DATA_HOME") {
+        return PathBuf::from(xdg).join("pkg-guard/shims");
+    }
+    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".local/share/pkg-guard/shims")
+}
+
+/// Shell snippet to prepend the shim directory on PATH.
+#[must_use]
+pub fn path_export_line(shim_dir: &Path) -> String {
+    format!("export PATH=\"{}:$PATH\"", shim_dir.display())
+}
+
 /// Status of shim installation and real-binary resolution.
 pub fn status_report(tools: &[&str]) -> serde_json::Value {
     let self_exe = env::current_exe().ok();
+    let shim_dir = default_shim_dir();
     let mut rows = Vec::new();
     for tool in tools {
         let real = resolve_real_binary(tool).ok();
         let env_key = resolve::env_key_for(tool);
+        let link = shim_dir.join(tool);
+        let shim_present = link.symlink_metadata().is_ok() || link.is_file();
         rows.push(serde_json::json!({
             "tool": tool,
+            "shim_path": link,
+            "shim_present": shim_present,
             "real_binary": real,
             "env_override": env_key,
             "env_set": env::var(&env_key).ok(),
@@ -225,15 +267,19 @@ pub fn status_report(tools: &[&str]) -> serde_json::Value {
     }
     serde_json::json!({
         "pkg_guard_binary": self_exe,
+        "default_shim_dir": shim_dir,
+        "path_export": path_export_line(&shim_dir),
         "shim_mode": format!("{:?}", ShimMode::from_env()).to_ascii_lowercase(),
         "mode_env": "PKG_GUARD_SHIM_MODE=off|warn|enforce",
         "tools": rows,
         "notes": [
-            "Install: pkg-guard shim install --dir ~/.local/bin --tools pip,npm,npx,uvx,uv,cargo",
-            "Ensure shim dir is before the real tools on PATH",
-            "MCP: uvx/npx top-level packages are gated; transitive deps still a residual risk",
-            "Bypass risk: calling /usr/bin/uvx or absolute paths skips the gate",
-            "Recursion guard: real binary resolution skips this executable",
+            "Layout: shims in a dedicated dir first on PATH; leave real tools in place",
+            "Install: pkg-guard shim install  # default ~/.local/share/pkg-guard/shims",
+            "Shell: export PATH=\"$HOME/.local/share/pkg-guard/shims:$PATH\"",
+            "Do not install shims into the same directory as real uv/uvx (collision)",
+            "MCP/GUI: set the same PATH prepend (hosts often skip bashrc)",
+            "Optional: PKG_GUARD_REAL_<TOOL> only if PATH lookup fails",
+            "Bypass: absolute paths to real tools skip the gate",
         ],
     })
 }

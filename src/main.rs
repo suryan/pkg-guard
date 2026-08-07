@@ -126,10 +126,10 @@ enum OsvCmd {
 enum ShimCmd {
     /// Create symlinks (pip, npm, cargo, …) pointing at this binary
     Install {
-        /// Directory for shims (default: ~/.local/bin)
+        /// Directory for shims (default: ~/.local/share/pkg-guard/shims)
         #[arg(long, short = 'd')]
         dir: Option<PathBuf>,
-        /// Comma-separated tools (default: pip,pip3,npm,npx,cargo)
+        /// Comma-separated tools
         #[arg(long, default_value = "pip,pip3,npm,npx,uvx,uv,cargo")]
         tools: String,
     },
@@ -279,17 +279,23 @@ fn parse_ecosystem_list(s: Option<&str>) -> anyhow::Result<Vec<data::Ecosystem>>
 fn run_shim_cmd(action: ShimCmd) -> anyhow::Result<()> {
     match action {
         ShimCmd::Install { dir, tools } => {
-            let dir = dir.unwrap_or_else(default_shim_dir);
+            let dir = dir.unwrap_or_else(shim::default_shim_dir);
             let tool_list = parse_tool_list(&tools);
             let created = shim::install_shims(&dir, &tool_list)?;
+            let path_line = shim::path_export_line(&dir);
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
                     "installed": created,
                     "dir": dir,
+                    "layout": "shims-first on PATH; leave real tools in their original locations",
+                    "path_export": path_line,
                     "next_steps": [
-                        format!("Ensure {} is early on your PATH", dir.display()),
-                        "Optional: export PKG_GUARD_REAL_PIP=$(which -a pip | tail -1)",
+                        format!("Add to shell profile: {path_line}"),
+                        "Leave real uv/uvx/npx where their installers put them (e.g. ~/.local/bin, nvm)",
+                        "Do not install shims into the same directory as real uv/uvx",
+                        "MCP/IDE: set the same PATH prepend (hosts often skip bashrc)",
+                        "Optional override only if needed: PKG_GUARD_REAL_<TOOL>=/abs/path",
                         "Mode: PKG_GUARD_SHIM_MODE=enforce|warn|off",
                         "pkg-guard shim status",
                     ],
@@ -305,7 +311,7 @@ fn run_shim_cmd(action: ShimCmd) -> anyhow::Result<()> {
             );
         }
         ShimCmd::Uninstall { dir, tools } => {
-            let dir = dir.unwrap_or_else(default_shim_dir);
+            let dir = dir.unwrap_or_else(shim::default_shim_dir);
             let tool_list = parse_tool_list(&tools);
             let mut removed = Vec::new();
             for tool in &tool_list {
@@ -317,19 +323,13 @@ fn run_shim_cmd(action: ShimCmd) -> anyhow::Result<()> {
             }
             println!(
                 "{}",
-                serde_json::to_string_pretty(&serde_json::json!({ "removed": removed }))?
+                serde_json::to_string_pretty(
+                    &serde_json::json!({ "removed": removed, "dir": dir })
+                )?
             );
         }
     }
     Ok(())
-}
-
-fn default_shim_dir() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_BIN_HOME") {
-        return PathBuf::from(xdg);
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".local/bin")
 }
 
 fn parse_tool_list(s: &str) -> Vec<String> {

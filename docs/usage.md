@@ -206,20 +206,32 @@ Transitive resolve walks the full runtime tree (cycle-safe). Not a full solver
 
 | Issue | Mitigation |
 |-------|------------|
-| Recursion (`pip` → pkg-guard → `pip` → …) | Real binary resolution **skips this executable**; override with `PKG_GUARD_REAL_PIP` etc. |
-| Bypass via `/usr/bin/pip` or absolute path | Shims only work when early on `PATH` |
+| Recursion (`pip` → pkg-guard → `pip` → …) | PATH walk **skips pkg-guard shims**; optional `PKG_GUARD_REAL_*` override |
+| Bypass via `/usr/bin/pip` or absolute path | Shims only work when shim dir is early on `PATH` |
+| Updaters overwrite tools | Leave reals in place; only shim dir is owned by pkg-guard |
 | MCP `uvx`/`npx` transitive deps | Gate top-level package; pin versions; OSV + blocklists; residual tree risk |
 | Incomplete CLI parsing | Common install/run forms gated; exotic URLs/paths pass through or skip |
 | Slow gates | Blocklist + OSV when version known; **no** Docker audit on every install |
 
 ### Install shims
 
+**Layout:** shims live in a **dedicated directory early on `PATH`**. Real
+`uv` / `uvx` / `npx` / `pip` stay where their installers put them. Do **not**
+move reals into a pkg-guard tree (that freezes upgrades and collides with
+official installers).
+
+```text
+PATH: ~/.local/share/pkg-guard/shims  →  ~/.local/bin  →  nvm / cargo / …
+        uv → pkg-guard                  real uv (updater-owned)
+        npx → pkg-guard                 real npx
+```
+
 ```bash
-cargo build --release
-# or: make install
-pkg-guard shim install --dir ~/.local/bin \
-  --tools pip,pip3,npm,npx,uvx,uv,cargo
-# ensure ~/.local/bin is before /usr/bin on PATH
+cargo build --release   # or: make install
+pkg-guard shim install  # default: ~/.local/share/pkg-guard/shims
+# put shims FIRST (shell profile):
+export PATH="$HOME/.local/share/pkg-guard/shims:$PATH"
+# MCP/IDE hosts often skip bashrc — set the same PATH there
 pkg-guard shim status
 
 # Modes
@@ -227,13 +239,13 @@ export PKG_GUARD_SHIM_MODE=enforce   # default: block bad installs / bad MCP pac
 export PKG_GUARD_SHIM_MODE=warn      # print warning, still run
 export PKG_GUARD_SHIM_MODE=off       # fully transparent
 
-# Point at the real tools if auto-detect fails
-export PKG_GUARD_REAL_PIP=/usr/bin/pip3
-export PKG_GUARD_REAL_NPM=/usr/bin/npm
-export PKG_GUARD_REAL_NPX=/usr/bin/npx
-export PKG_GUARD_REAL_UVX=$HOME/.local/bin/uvx   # real binary, not the shim
-export PKG_GUARD_REAL_CARGO=$HOME/.cargo/bin/cargo
+# Optional: only if PATH lookup fails (prefer PATH order instead)
+# export PKG_GUARD_REAL_PIP=/usr/bin/pip3
+# export PKG_GUARD_REAL_UVX=$HOME/.local/bin/uvx
 ```
+
+Do **not** install shims into `~/.local/bin` if that is also where `uv`/`uvx`
+live — one name per directory; the real would be overwritten.
 
 Then:
 

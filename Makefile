@@ -95,8 +95,12 @@ osv-update: $(BIN) ## Download OSV dumps (ECOSYSTEMS=cargo,python or empty=all)
 osv-status: $(BIN) ## Show local OSV dump status
 	"$(BIN)" osv status
 
-shim-install: $(BIN) ## Install pip/npm/npx/uvx/cargo shims into BINDIR
-	"$(BIN)" shim install --dir "$(BINDIR)" --tools pip,pip3,npm,npx,uvx,uv,cargo
+# Shims go in a dedicated dir (not BINDIR) so real uv/uvx in ~/.local/bin stay put.
+SHIMDIR ?= $(HOME)/.local/share/pkg-guard/shims
+
+shim-install: $(BIN) ## Install pip/npm/npx/uvx/cargo shims into SHIMDIR
+	"$(BIN)" shim install --dir "$(SHIMDIR)" --tools pip,pip3,npm,npx,uvx,uv,cargo
+	@echo "Add to shell profile: export PATH=\"$(SHIMDIR):\$$PATH\""
 
 shim-status: $(BIN) ## Show shim resolution status
 	"$(BIN)" shim status
