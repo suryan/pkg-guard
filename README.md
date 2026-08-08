@@ -20,35 +20,57 @@ Built in Rust for performance, safety, and zero-dependency deployment.
 ## Install
 
 No release binaries required — build from source on the machine that will run it.
+Works on **macOS** and **Linux** (including WSL2).
 
 ### One-liner (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/suryan/pkg-guard/master/scripts/install.sh | bash
+# Binary + MCP shims (uvx/uv/npx) + shell PATH (bash + zsh)
+curl -fsSL https://raw.githubusercontent.com/suryan/pkg-guard/master/scripts/install.sh \
+  | bash -s -- --with-shims --yes
 ```
 
-Installs to `~/.local/bin/pkg-guard` (ensure that dir is on your `PATH`). The script
-bootstraps [rustup](https://rustup.rs) if `cargo` is missing, clones the repo, builds
-a release binary, and installs it.
+What that does:
+
+1. Bootstraps [rustup](https://rustup.rs) if `cargo` is missing  
+2. Builds a release binary → `~/.local/bin/pkg-guard`  
+3. Installs **global MCP shims only** (`uvx`, `uv`, `npx`) under `~/.local/share/pkg-guard/shims`  
+4. Writes `~/.config/pkg-guard/shim.env` and sources it from `~/.bashrc` / `~/.zshrc` / `~/.profile` / `~/.zprofile`  
 
 ```bash
-# options (download first, or clone then run)
+# options
 curl -fsSL https://raw.githubusercontent.com/suryan/pkg-guard/master/scripts/install.sh -o install-pkg-guard.sh
 bash install-pkg-guard.sh --help
-bash install-pkg-guard.sh --ref master --prefix ~/.local --with-shims --yes
+bash install-pkg-guard.sh --with-shims --with-osv --yes   # also download local OSV dumps
+bash install-pkg-guard.sh --with-shims --shims all        # full global set (usually not needed)
+```
+
+Open a **new shell** after install, then:
+
+```bash
+which -a uvx npx pip cargo   # uvx/npx = shims; pip/cargo = real tools
+pkg-guard shim status --tools uvx,uv,npx
+```
+
+### From a local clone
+
+```bash
+./scripts/install.sh --local --with-shims
+# or stepwise:
+make setup-user              # release binary + MCP shims + shell integration
+# make shim-install SHIM_TOOLS=all   # optional full global set
 ```
 
 ### Rust developers
 
 ```bash
 cargo install --git https://github.com/suryan/pkg-guard --locked
-# or from a clone:
-cargo build --release && make install   # → ~/.local/bin/pkg-guard
-./scripts/install.sh --local            # same, via the install script
+# then user integration only:
+./scripts/setup-user.sh
 ```
 
-Requires a Unix-like environment (Linux, macOS, WSL2). Needs `git`, a C linker
-(`build-essential` / Xcode CLT), and network access for crates.io on first build.
+**Requirements:** `git`, a C linker (`build-essential` on Debian/Ubuntu, Xcode CLT on macOS),
+network for crates.io on first build.
 
 ## Quick start
 
@@ -80,45 +102,27 @@ pkg-guard serve
 
 ## Package-manager shims
 
-Shims make day-to-day installs safer without changing how you invoke tools.
-When you run `pip install`, `npm install`, `uvx some-mcp-server`, etc., the
-shim runs **policy checks first** (custom/feed blocklist + OSV when a version
-is known), then `exec`s the **real** package manager.
+Shims intercept tools on `PATH`, run policy checks (blocklist + OSV when versioned),
+then `exec` the real binary. **Global default is MCP-only** — the risky path for
+IDE agents is `uvx` / `npx` (and `uv tool run`), which pull transitive deps you
+never type by hand.
 
-| Tool | What gets gated |
-|------|-----------------|
-| `pip` / `pip3` | `install` package lines |
-| `npm` / `yarn` / `pnpm` | install / add style commands |
-| `npx` / `pnpm dlx` / `yarn dlx` | package + **transitive** runtime deps |
-| `uv` / `uvx` | tool run / install forms; `uvx` expands transitive deps |
-| `cargo` | `add` / install-like forms |
-| `mvn` / `gradle` | multicall names reserved (see usage guide) |
+| Scope | Tools | Why |
+|-------|--------|-----|
+| **Global (recommended)** | `uvx`, `uv`, `npx` | MCP / agent launches |
+| **Per project (opt-in)** | `pip`, `npm`, `cargo`, … | Install policy belongs to the repo |
 
-This is especially useful for **MCP servers** started as `uvx pkg==…` or
-`npx -y pkg@…` — those resolve transitive dependencies you never type by hand.
-
-### Setup (recommended)
-
-**Rule:** put shims in a **dedicated directory first on `PATH`**. Leave real
-`uv` / `uvx` / `npx` / `pip` where their installers put them. Do **not** install
-shims into `~/.local/bin` if that is where the real tools live.
+**Rule:** shims live in a **dedicated directory first on `PATH`**. Leave real
+`uv` / `uvx` / `npx` where installers put them — never overwrite `~/.local/bin`.
 
 ```bash
-make install
-pkg-guard shim install
-# → ~/.local/share/pkg-guard/shims/{pip,pip3,npm,npx,uvx,uv,cargo,…}
-# subset:  pkg-guard shim install --tools uvx,uv,npx
+# Automated (preferred)
+./scripts/setup-user.sh                 # mcp tools + shim.env + shell rc
+# or: make setup-user
 
-# Prepend shims on PATH (persist via ~/.config/pkg-guard/shim.env)
-export PATH="$HOME/.local/share/pkg-guard/shims:$PATH"
-
-pkg-guard shim status
-which -a uvx   # first hit = shim; second hit = real tool
+# Manual subset
+pkg-guard shim install --tools uvx,uv,npx
 ```
-
-Source `shim.env` from **both** `~/.bashrc` and `~/.profile` (login shells often
-prepend `~/.local/bin` after bashrc). For IDE/MCP hosts, set the same `PATH`
-in the host environment — many skip shell profiles.
 
 | Mode | Env | Behavior |
 |------|-----|----------|
@@ -126,11 +130,17 @@ in the host environment — many skip shell profiles.
 | **warn** | `PKG_GUARD_SHIM_MODE=warn` | Warn, still run the real tool |
 | **off** | `PKG_GUARD_SHIM_MODE=off` | Fully transparent (no checks) |
 
+**Per-project installs** (direnv example):
+
 ```bash
-pkg-guard shim uninstall   # removes shim links only; real tools untouched
+pkg-guard shim install -d .pkg-guard/shims --tools pip,pip3,npm,cargo
+# .envrc:  PATH_add .pkg-guard/shims
 ```
 
-Full guide (MCP PATH, anti-patterns, troubleshooting):
+Template: `~/.config/pkg-guard/project-shims.example.env` (written by `setup-user.sh`).
+
+MCP/IDE hosts often skip shell profiles — set the same shim `PATH` in the host env
+(see Grok/`mcpServers` config). Full guide:
 [docs/usage.md — Transparent package-manager shims](docs/usage.md#transparent-package-manager-shims).
 
 ## Blocklist layers
@@ -241,7 +251,9 @@ real binary) so the gate is not skipped.
 make help          # list targets
 make precommit     # full gate: fmt, clippy, tests, ≥90% coverage, dogfood
 make release       # optimized binary → target/release/pkg-guard
-make install       # install to ~/.local/bin
+make install       # install binary to ~/.local/bin
+make setup-user    # binary + MCP shims + shell PATH integration
+make shim-install  # SHIM_TOOLS=uvx,uv,npx (or mcp / all)
 make test          # cargo test
 make coverage      # line coverage summary
 make osv-update    # download local OSV dumps (ECOSYSTEMS=cargo optional)
@@ -269,7 +281,10 @@ src/
 ├── shim/            # Transparent pip/npm/uvx/cargo multicall wrappers
 └── data/            # Blocklist stack + shared types
 data/blocklist/      # popular.json (typosquat); example-feed.json (host yourself)
-scripts/precommit.sh # Quality gate (90% line coverage)
+scripts/
+├── install.sh       # macOS/Linux install-from-source
+├── setup-user.sh    # MCP shims + shim.env + shell rc
+└── precommit.sh     # Quality gate (90% line coverage)
 ```
 
 ## Docs

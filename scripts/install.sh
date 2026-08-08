@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pkg-guard install-from-source
+# pkg-guard install-from-source (macOS + Linux / WSL2)
 #
 # Builds and installs a release binary on the local machine. No GitHub release
 # artifacts required — only git, a C toolchain, and Rust (rustup is bootstrapped
@@ -8,16 +8,19 @@
 # One-liner (from GitHub):
 #   curl -fsSL https://raw.githubusercontent.com/suryan/pkg-guard/master/scripts/install.sh | bash
 #
+# Recommended (binary + MCP shims + shell PATH):
+#   curl -fsSL …/install.sh | bash -s -- --with-shims --yes
+#
 # From a local clone:
-#   ./scripts/install.sh
-#   ./scripts/install.sh --prefix /usr/local
-#   ./scripts/install.sh --ref v0.5.0 --with-shims
+#   ./scripts/install.sh --local --with-shims
+#   ./scripts/install.sh --ref v0.5.0 --with-shims --with-osv
 #
 # Environment (optional):
 #   PKG_GUARD_REPO     git URL (default: https://github.com/suryan/pkg-guard.git)
 #   PKG_GUARD_REF      branch/tag/commit (default: master)
 #   PKG_GUARD_PREFIX   install prefix (default: $HOME/.local) → bin/pkg-guard
 #   PKG_GUARD_DIR      source checkout dir (default: $HOME/.local/src/pkg-guard)
+#   PKG_GUARD_SHIM_DIR override shim directory
 #   CARGO_HOME / RUSTUP_HOME  standard rustup vars
 #
 # Exit codes: 0 success, 1 user/env error, 2 build/install failure
@@ -30,6 +33,9 @@ REF="${PKG_GUARD_REF:-master}"
 PREFIX="${PKG_GUARD_PREFIX:-${PREFIX:-$HOME/.local}}"
 SRC_DIR="${PKG_GUARD_DIR:-$HOME/.local/src/pkg-guard}"
 WITH_SHIMS=0
+WITH_OSV=0
+SHIM_TOOLS="mcp"   # mcp | all | comma-list (see setup-user.sh)
+NO_SHELL_RC=0
 YES=0
 KEEP_SRC=1
 LOCAL_ONLY=0
@@ -42,16 +48,26 @@ Usage: install.sh [options]
   --ref REF        Git branch, tag, or commit. Default: master
   --repo URL       Git remote URL
   --dir DIR        Source checkout directory. Default: ~/.local/src/pkg-guard
-  --with-shims     After install, run: pkg-guard shim install
+  --with-shims     MCP shims (uvx,uv,npx) + shim.env + shell rc (macOS/Linux)
+  --shims LIST     With --with-shims: mcp (default) | all | uvx,npx,…
+  --no-shell-rc    With --with-shims: install links + shim.env, do not edit rc
+  --with-osv       After install, run: pkg-guard osv update (large; npm ~200MB+)
   --no-keep-src    Remove the checkout after a successful install
   --local          Build the repo containing this script (no clone/fetch)
   --yes            Non-interactive (auto-install rustup if needed)
   -h, --help       Show this help
 
 Examples:
-  curl -fsSL https://raw.githubusercontent.com/suryan/pkg-guard/master/scripts/install.sh | bash
-  ./scripts/install.sh --local --prefix ~/.local
-  PKG_GUARD_REF=v0.5.0 ./scripts/install.sh --yes
+  # Recommended first-time setup
+  curl -fsSL https://raw.githubusercontent.com/suryan/pkg-guard/master/scripts/install.sh \
+    | bash -s -- --with-shims --yes
+
+  ./scripts/install.sh --local --with-shims
+  ./scripts/install.sh --local --with-shims --shims all
+  PKG_GUARD_REF=v0.5.0 ./scripts/install.sh --yes --with-shims --with-osv
+
+Shims: global default is MCP-only (uvx, uv, npx). Gate pip/npm/cargo per project
+(see docs/usage.md and ~/.config/pkg-guard/project-shims.example.env).
 EOF
 }
 
@@ -76,6 +92,10 @@ while [ $# -gt 0 ]; do
     --dir)         SRC_DIR="${2:-}"; shift 2 ;;
     --dir=*)       SRC_DIR="${1#*=}"; shift ;;
     --with-shims)  WITH_SHIMS=1; shift ;;
+    --shims)       SHIM_TOOLS="${2:-}"; WITH_SHIMS=1; shift 2 ;;
+    --shims=*)     SHIM_TOOLS="${1#*=}"; WITH_SHIMS=1; shift ;;
+    --no-shell-rc) NO_SHELL_RC=1; shift ;;
+    --with-osv)    WITH_OSV=1; shift ;;
     --no-keep-src) KEEP_SRC=0; shift ;;
     --local)       LOCAL_ONLY=1; shift ;;
     --yes|-y)      YES=1; shift ;;
@@ -140,6 +160,21 @@ ensure_rust() {
   log "rustc $(rustc --version | awk '{print $2}')"
 }
 
+# Hint for missing C toolchain (common first-run failure on bare VMs / new Macs)
+check_linker_hint() {
+  if command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || command -v clang >/dev/null 2>&1; then
+    return 0
+  fi
+  case "$OS" in
+    Darwin)
+      warn "no C compiler on PATH — install Xcode CLT: xcode-select --install"
+      ;;
+    Linux)
+      warn "no C compiler on PATH — install build tools (e.g. sudo apt install build-essential)"
+      ;;
+  esac
+}
+
 # ─── source tree ─────────────────────────────────────────────────────────────
 
 resolve_source() {
@@ -155,9 +190,6 @@ resolve_source() {
     return 0
   fi
 
-  # If the user is already inside a pkg-guard clone and did not force a remote ref
-  # via env that differs, still prefer clone-to-SRC_DIR for a clean install path
-  # unless --local was used.
   need_cmd git
 
   mkdir -p "$(dirname "$SRC_DIR")"
@@ -165,7 +197,6 @@ resolve_source() {
     log "updating existing checkout: ${SRC_DIR}"
     git -C "$SRC_DIR" remote set-url origin "$REPO" 2>/dev/null || true
     git -C "$SRC_DIR" fetch --tags --force origin
-    # Allow branch or tag
     if git -C "$SRC_DIR" rev-parse --verify "refs/remotes/origin/${REF}" >/dev/null 2>&1; then
       git -C "$SRC_DIR" checkout -B "$REF" "origin/${REF}"
     elif git -C "$SRC_DIR" rev-parse --verify "refs/tags/${REF}" >/dev/null 2>&1; then
@@ -178,7 +209,6 @@ resolve_source() {
   else
     log "cloning ${REPO} (${REF}) → ${SRC_DIR}"
     rm -rf "$SRC_DIR"
-    # Shallow clone when REF looks like a branch name; full history for odd refs
     if git ls-remote --exit-code --heads "$REPO" "$REF" >/dev/null 2>&1; then
       git clone --depth 1 --branch "$REF" "$REPO" "$SRC_DIR"
     elif git ls-remote --exit-code --tags "$REPO" "$REF" >/dev/null 2>&1 \
@@ -199,11 +229,9 @@ build_release() {
   log "cargo build --release (this may take a few minutes on first build)"
   (
     cd "$SRC_DIR"
-    # Avoid polluting the user's global target if they set CARGO_TARGET_DIR elsewhere
     cargo build --release --locked 2>/dev/null || cargo build --release
   )
   local built="${SRC_DIR}/target/release/pkg-guard"
-  # Windows-style name shouldn't appear, but be defensive
   if [ ! -x "$built" ] && [ -f "${built}.exe" ]; then
     built="${built}.exe"
   fi
@@ -214,7 +242,6 @@ build_release() {
 install_binary() {
   log "installing → ${BIN}"
   mkdir -p "$BINDIR"
-  # install(1) is not on all minimal systems; fall back to cp+chmod
   if command -v install >/dev/null 2>&1; then
     install -m 755 "$BUILT_BIN" "$BIN"
   else
@@ -243,15 +270,44 @@ verify() {
   esac
 }
 
-maybe_shims() {
+# Prefer in-tree setup-user.sh (local or just-cloned). Fall back to remote raw URL
+# only when --with-shims runs against an install that somehow lacks the script.
+run_user_setup() {
   [ "$WITH_SHIMS" -eq 1 ] || return 0
-  log "installing package-manager shims"
-  if ! "$BIN" shim install; then
-    warn "shim install failed — run later: pkg-guard shim install"
+
+  local setup="${SRC_DIR}/scripts/setup-user.sh"
+  local args=(--bin "$BIN" --tools "$SHIM_TOOLS")
+  if [ "$NO_SHELL_RC" -eq 1 ]; then
+    args+=(--no-shell-rc)
+  fi
+
+  if [ -f "$setup" ]; then
+    log "configuring user shims + shell integration"
+    bash "$setup" "${args[@]}"
     return 0
   fi
-  printf '\n  Put shims first on PATH (see docs/usage.md):\n\n'
+
+  warn "setup-user.sh missing in source tree — installing shims only"
+  case "$SHIM_TOOLS" in
+    mcp|MCP|default) SHIM_TOOLS="uvx,uv,npx" ;;
+    all|ALL|full)    SHIM_TOOLS="pip,pip3,npm,npx,uvx,uv,cargo" ;;
+  esac
+  if ! "$BIN" shim install --tools "$SHIM_TOOLS"; then
+    warn "shim install failed — run later: pkg-guard shim install --tools uvx,uv,npx"
+    return 0
+  fi
+  printf '\n  Put shims first on PATH (or re-run scripts/setup-user.sh):\n\n'
   printf '    export PATH="$HOME/.local/share/pkg-guard/shims:$PATH"\n\n'
+}
+
+maybe_osv() {
+  [ "$WITH_OSV" -eq 1 ] || return 0
+  log "downloading local OSV dumps (npm is large; can take several minutes)"
+  if ! "$BIN" osv update; then
+    warn "osv update failed — run later: pkg-guard osv update"
+    return 0
+  fi
+  "$BIN" osv status >/dev/null 2>&1 || true
 }
 
 cleanup_src() {
@@ -265,12 +321,14 @@ cleanup_src() {
 
 main() {
   log "pkg-guard install-from-source"
+  check_linker_hint
   ensure_rust
   resolve_source
   build_release || exit 2
   install_binary || exit 2
   verify
-  maybe_shims
+  run_user_setup
+  maybe_osv
   cleanup_src
 
   cat <<EOF
@@ -281,10 +339,35 @@ Quick checks:
   pkg-guard --help
   pkg-guard check -e python -p requests
 
+EOF
+
+  if [ "$WITH_SHIMS" -eq 1 ]; then
+    cat <<'EOF'
+Shims (global MCP default: uvx, uv, npx):
+  Open a new shell, then:  which -a uvx npx pip
+  Status:                  pkg-guard shim status --tools uvx,uv,npx
+
+EOF
+  else
+    cat <<'EOF'
 Optional next steps:
-  pkg-guard shim install          # PATH-level install gates
-  pkg-guard osv update            # local OSV dumps for offline scan
-  docs: https://github.com/suryan/pkg-guard
+  ./scripts/setup-user.sh          # MCP shims + shim.env + shell rc
+  # or:  bash scripts/install.sh --local --with-shims
+
+EOF
+  fi
+
+  if [ "$WITH_OSV" -ne 1 ]; then
+    cat <<'EOF'
+Offline OSV (recommended for CI / large scans):
+  pkg-guard osv update
+  pkg-guard osv status
+
+EOF
+  fi
+
+  cat <<'EOF'
+Docs: docs/usage.md  ·  https://github.com/suryan/pkg-guard
 
 EOF
 }

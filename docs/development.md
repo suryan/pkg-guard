@@ -29,6 +29,9 @@ cargo watch -x test -x 'run -- check -e python -p requests'
 pkg-guard/
 ├── Cargo.toml           # Dependencies and build config
 ├── scripts/
+│   ├── install.sh       # macOS/Linux install-from-source (+ optional shims/OSV)
+│   ├── setup-user.sh    # MCP shims + shim.env + shell rc (idempotent)
+│   ├── build.sh
 │   └── precommit.sh     # fmt, clippy, tests+coverage (≥90% lines), dogfood
 ├── src/
 │   ├── main.rs          # Entry point, CLI + multicall shim dispatch

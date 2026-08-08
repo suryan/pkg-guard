@@ -3,12 +3,14 @@
 ## Installation
 
 pkg-guard is a single Rust binary. Prefer **install from source** on each machine
-(no GitHub release artifacts to maintain).
+(no GitHub release artifacts to maintain). Supported: **macOS**, **Linux**, **WSL2**.
 
-### One-liner
+### One-liner (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/suryan/pkg-guard/master/scripts/install.sh | bash
+# Binary + global MCP shims (uvx/uv/npx) + shell PATH integration
+curl -fsSL https://raw.githubusercontent.com/suryan/pkg-guard/master/scripts/install.sh \
+  | bash -s -- --with-shims --yes
 ```
 
 What it does:
@@ -17,13 +19,20 @@ What it does:
 2. Clones/updates the repo under `~/.local/src/pkg-guard` (override with `--dir`)
 3. `cargo build --release`
 4. Installs to `~/.local/bin/pkg-guard` (override with `--prefix`)
+5. With `--with-shims`: runs `scripts/setup-user.sh`
+   - multicall links for **`uvx`, `uv`, `npx`** only (MCP launchers)
+   - writes `~/.config/pkg-guard/shim.env`
+   - sources it from `~/.bashrc`, `~/.zshrc`, `~/.profile`, `~/.zprofile` (idempotent)
+   - writes per-project template `~/.config/pkg-guard/project-shims.example.env`
 
 ```bash
 # Common options
 bash scripts/install.sh --help
 bash scripts/install.sh --prefix ~/.local --with-shims --yes
-bash scripts/install.sh --ref master          # branch, tag, or commit
-bash scripts/install.sh --local               # build the current clone only
+bash scripts/install.sh --with-shims --with-osv --yes   # also download OSV dumps
+bash scripts/install.sh --with-shims --shims all        # full global tool set
+bash scripts/install.sh --ref master
+bash scripts/install.sh --local --with-shims            # current clone only
 PKG_GUARD_PREFIX=/usr/local sudo -E bash scripts/install.sh --yes   # system-wide (careful)
 ```
 
@@ -33,16 +42,20 @@ PKG_GUARD_PREFIX=/usr/local sudo -E bash scripts/install.sh --yes   # system-wid
 | `--ref` / `PKG_GUARD_REF` | `master` | Git branch, tag, or commit |
 | `--repo` / `PKG_GUARD_REPO` | this GitHub repo | Clone URL |
 | `--dir` / `PKG_GUARD_DIR` | `~/.local/src/pkg-guard` | Checkout path |
-| `--with-shims` | off | Run `pkg-guard shim install` after |
+| `--with-shims` | off | MCP shims + `shim.env` + shell rc (see `setup-user.sh`) |
+| `--shims` | `mcp` | With shims: `mcp` \| `all` \| `uvx,npx,…` |
+| `--no-shell-rc` | off | Install shims + env file only; do not edit rc files |
+| `--with-osv` | off | Run `pkg-guard osv update` after install (large) |
 | `--yes` | off | Non-interactive rustup install |
 
-**Requirements:** Linux or macOS (or WSL2), `curl` + `git`, C linker
-(`build-essential` on Debian/Ubuntu, Xcode CLT on macOS), network for crates.io.
+**Requirements:** `curl` + `git`, C linker (`build-essential` on Debian/Ubuntu,
+Xcode CLT on macOS: `xcode-select --install`), network for crates.io.
 
 ### `cargo install` (Rust toolchain already present)
 
 ```bash
 cargo install --git https://github.com/suryan/pkg-guard --locked
+./scripts/setup-user.sh    # shims + shell integration (from a clone)
 ```
 
 ### From a local clone
@@ -50,10 +63,10 @@ cargo install --git https://github.com/suryan/pkg-guard --locked
 ```bash
 git clone https://github.com/suryan/pkg-guard.git
 cd pkg-guard
-./scripts/install.sh --local
-# or:
-cargo build --release
-make install                    # → ~/.local/bin/pkg-guard
+./scripts/install.sh --local --with-shims
+# or stepwise:
+make setup-user                 # release binary + MCP shims + shell rc
+# make shim-install SHIM_TOOLS=all
 ```
 
 ### Make shortcuts
@@ -61,7 +74,9 @@ make install                    # → ~/.local/bin/pkg-guard
 ```bash
 make help          # list targets
 make release       # optimized build
-make install       # install to ~/.local/bin
+make install       # install binary to ~/.local/bin
+make setup-user    # binary + MCP shims + shim.env + shell rc
+make shim-install  # SHIM_TOOLS=uvx,uv,npx (or mcp / all)
 make precommit     # fmt, clippy, tests, ≥90% coverage
 make scan          # scan FILE=Cargo.lock
 make dogfood       # scan this repo's Cargo.lock
@@ -74,9 +89,12 @@ make osv-status
 ```bash
 pkg-guard --version
 pkg-guard --help
+# after --with-shims / setup-user (new shell):
+which -a uvx npx pip cargo
+pkg-guard shim status --tools uvx,uv,npx
 ```
 
-If the command is not found, add `~/.local/bin` to `PATH`.
+If `pkg-guard` is not found, add `~/.local/bin` to `PATH`.
 
 ## Blocklist layers
 
@@ -259,6 +277,10 @@ Transitive resolve walks the full runtime tree (cycle-safe). Not a full solver
 
 ### Best setup (recommended)
 
+**Policy:** global shims cover **MCP launchers only** (`uvx`, `uv`, `npx`).
+`pip` / `npm` / `cargo` installs are a **per-project** choice (direnv / project env),
+so each repo can decide enforce vs warn and which tools to gate.
+
 **Rule:** put shims in a **dedicated directory that is first on `PATH`**.
 Leave real package managers where their installers put them. Do **not** move,
 copy, or rename real `uv` / `uvx` / `npx` / `pip` into a pkg-guard tree.
@@ -266,12 +288,11 @@ copy, or rename real `uv` / `uvx` / `npx` / `pip` into a pkg-guard tree.
 ```text
 PATH order (left = first):
 
-  ~/.local/share/pkg-guard/shims/     ← pkg-guard owns this
+  ~/.local/share/pkg-guard/shims/     ← pkg-guard owns this (global)
       uv  →  ~/.local/bin/pkg-guard
       uvx →  ~/.local/bin/pkg-guard
       npx →  ~/.local/bin/pkg-guard
-      pip →  ~/.local/bin/pkg-guard
-      …
+      (no pip/npm/cargo here by default)
 
   ~/.local/bin/                       ← real uv / uvx (self-update OK)
   ~/.nvm/.../bin/                     ← real npx / npm
@@ -293,43 +314,65 @@ file named `uv`. Installing a shim there **overwrites** the real binary (or
 forces you to relocate it, which freezes upgrades). A separate shim directory
 avoids that.
 
-#### Step-by-step
+#### Step-by-step (automated — preferred)
+
+Works the same on **macOS (zsh)** and **Linux (bash/zsh)**:
 
 ```bash
-# 1) Install the pkg-guard binary (normal location is fine)
+# From a clone, after the binary exists — or use install.sh --with-shims
+./scripts/setup-user.sh
+# equivalent: make setup-user
+# options:    ./scripts/setup-user.sh --tools all
+#             ./scripts/setup-user.sh --no-shell-rc
+```
+
+That is idempotent: re-running will not duplicate shell rc blocks.
+
+#### Step-by-step (manual)
+
+```bash
+# 1) Binary
 make install
 # → ~/.local/bin/pkg-guard
 
-# 2) Create multicall shims in the dedicated dir (default path)
-pkg-guard shim install
-# → ~/.local/share/pkg-guard/shims/{pip,pip3,npm,npx,uvx,uv,cargo}
-# override dir:  pkg-guard shim install -d /path/to/shims
-# subset:        pkg-guard shim install --tools uvx,uv,npx
+# 2) Global MCP shims only
+pkg-guard shim install --tools uvx,uv,npx
+# → ~/.local/share/pkg-guard/shims/{uvx,uv,npx}
+# full set (usually avoid globally):  --tools pip,pip3,npm,npx,uvx,uv,cargo
 
-# 3) Put the shim dir FIRST on PATH — use a small env file you can share
+# 3) PATH via shared env file
 mkdir -p ~/.config/pkg-guard
 cat > ~/.config/pkg-guard/shim.env <<'EOF'
-# pkg-guard shims first; leave real tools where installers put them
 export PATH="${HOME}/.local/share/pkg-guard/shims:${PATH}"
 export PKG_GUARD_SHIM_MODE="${PKG_GUARD_SHIM_MODE:-enforce}"
 EOF
 
-# 4) Load it from interactive shells (bashrc)
-echo '[ -f "$HOME/.config/pkg-guard/shim.env" ] && . "$HOME/.config/pkg-guard/shim.env"' \
-  >> ~/.bashrc
-
-# 5) Login shells often prepend ~/.local/bin *after* bashrc — source again last
-#    so shims stay first (Debian/Ubuntu ~/.profile does this):
-echo '[ -f "$HOME/.config/pkg-guard/shim.env" ] && . "$HOME/.config/pkg-guard/shim.env"' \
-  >> ~/.profile
+# 4–5) Interactive + login shells (bash and zsh)
+for f in ~/.bashrc ~/.zshrc ~/.profile ~/.zprofile; do
+  grep -q 'pkg-guard/shim.env' "$f" 2>/dev/null && continue
+  printf '\n# >>> pkg-guard shims >>>\n[ -f "$HOME/.config/pkg-guard/shim.env" ] && . "$HOME/.config/pkg-guard/shim.env"\n# <<< pkg-guard shims <<<\n' >> "$f"
+done
 
 # 6) New shell (or: source ~/.config/pkg-guard/shim.env)
 # 7) Verify
-pkg-guard shim status
-which -a uv uvx npx
-# first hit for each should be .../pkg-guard/shims/...
-# second hit should be the real tool
+pkg-guard shim status --tools uvx,uv,npx
+which -a uv uvx npx pip cargo
+# uvx/npx first hit = …/pkg-guard/shims/… ; pip/cargo = real tools
 ```
+
+#### Per-project shims (pip / npm / cargo)
+
+```bash
+# In the repo
+pkg-guard shim install -d .pkg-guard/shims --tools pip,pip3,npm,cargo
+
+# direnv .envrc
+PATH_add .pkg-guard/shims
+export PKG_GUARD_SHIM_MODE="${PKG_GUARD_SHIM_MODE:-enforce}"
+# direnv allow
+```
+
+See also `~/.config/pkg-guard/project-shims.example.env` after `setup-user.sh`.
 
 #### MCP / IDE hosts
 

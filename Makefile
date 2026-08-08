@@ -14,9 +14,12 @@ FILE ?= Cargo.lock
 # Optional: make project PATH=.
 PATH_DIR ?= .
 
+# Global shims: MCP launchers only by default (uvx,uv,npx). Use SHIM_TOOLS=all for full set.
+SHIM_TOOLS ?= uvx,uv,npx
+
 .PHONY: help build release install uninstall test check fmt clippy precommit \
 	coverage cov-html scan project dogfood osv-update osv-status \
-	shim-install shim-status clean run-serve
+	shim-install shim-status setup-user clean run-serve
 
 help: ## Show this help
 	@echo "pkg-guard make targets"
@@ -24,7 +27,7 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo ""
-	@echo "Variables: PREFIX=$(PREFIX)  FILE=$(FILE)  ECOSYSTEMS=$(ECOSYSTEMS)"
+	@echo "Variables: PREFIX=$(PREFIX)  FILE=$(FILE)  ECOSYSTEMS=$(ECOSYSTEMS)  SHIM_TOOLS=$(SHIM_TOOLS)"
 
 # ─── build & install ──────────────────────────────────────────────────────────
 
@@ -98,12 +101,18 @@ osv-status: $(BIN) ## Show local OSV dump status
 # Shims go in a dedicated dir (not BINDIR) so real uv/uvx in ~/.local/bin stay put.
 SHIMDIR ?= $(HOME)/.local/share/pkg-guard/shims
 
-shim-install: $(BIN) ## Install pip/npm/npx/uvx/cargo shims into SHIMDIR
-	"$(BIN)" shim install --dir "$(SHIMDIR)" --tools pip,pip3,npm,npx,uvx,uv,cargo
-	@echo "Add to shell profile: export PATH=\"$(SHIMDIR):\$$PATH\""
+shim-install: $(BIN) ## Install global shims (default SHIM_TOOLS=uvx,uv,npx; or all)
+	@tools="$(SHIM_TOOLS)"; \
+	if [ "$$tools" = "all" ] || [ "$$tools" = "ALL" ]; then tools="pip,pip3,npm,npx,uvx,uv,cargo"; fi; \
+	if [ "$$tools" = "mcp" ] || [ "$$tools" = "MCP" ]; then tools="uvx,uv,npx"; fi; \
+	"$(BIN)" shim install --dir "$(SHIMDIR)" --tools "$$tools"
+	@echo "Shims in $(SHIMDIR). Prefer: make setup-user  (writes shim.env + shell rc)"
 
 shim-status: $(BIN) ## Show shim resolution status
-	"$(BIN)" shim status
+	"$(BIN)" shim status --tools "$(SHIM_TOOLS)"
+
+setup-user: install ## Binary + MCP shims + shim.env + shell rc (macOS/Linux)
+	bash "$(ROOT)/scripts/setup-user.sh" --bin "$(BINDIR)/pkg-guard" --tools "$(SHIM_TOOLS)"
 
 run-serve: $(BIN) ## Start MCP server (stdio)
 	"$(BIN)" serve
