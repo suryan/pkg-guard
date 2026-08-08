@@ -252,4 +252,4 @@ scripts/precommit.sh # Quality gate (90% line coverage)
 
 ## License
 
-MIT
+[MIT](LICENSE)
