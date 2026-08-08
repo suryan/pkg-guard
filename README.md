@@ -17,12 +17,43 @@ Built in Rust for performance, safety, and zero-dependency deployment.
 - **MCP server** — Model Context Protocol integration for IDE agents (Kiro, VS Code, etc.)
 - **Standalone CLI** — CI/CD and ad-hoc use from a single binary
 
+## Install
+
+No release binaries required — build from source on the machine that will run it.
+
+### One-liner (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/suryan/pkg-guard/master/scripts/install.sh | bash
+```
+
+Installs to `~/.local/bin/pkg-guard` (ensure that dir is on your `PATH`). The script
+bootstraps [rustup](https://rustup.rs) if `cargo` is missing, clones the repo, builds
+a release binary, and installs it.
+
+```bash
+# options (download first, or clone then run)
+curl -fsSL https://raw.githubusercontent.com/suryan/pkg-guard/master/scripts/install.sh -o install-pkg-guard.sh
+bash install-pkg-guard.sh --help
+bash install-pkg-guard.sh --ref master --prefix ~/.local --with-shims --yes
+```
+
+### Rust developers
+
+```bash
+cargo install --git https://github.com/suryan/pkg-guard --locked
+# or from a clone:
+cargo build --release && make install   # → ~/.local/bin/pkg-guard
+./scripts/install.sh --local            # same, via the install script
+```
+
+Requires a Unix-like environment (Linux, macOS, WSL2). Needs `git`, a C linker
+(`build-essential` / Xcode CLT), and network access for crates.io on first build.
+
 ## Quick start
 
 ```bash
-# Build & install the binary
-cargo build --release
-make install                          # → ~/.local/bin/pkg-guard
+# After install (or: cargo build --release && make install)
 
 # Check a package for typosquatting / blocklist hits
 pkg-guard check -e python -p reqeusts

@@ -2,17 +2,58 @@
 
 ## Installation
 
-### From Source
+pkg-guard is a single Rust binary. Prefer **install from source** on each machine
+(no GitHub release artifacts to maintain).
+
+### One-liner
 
 ```bash
-git clone <repo-url>
-cd pkg-guard
-cargo build --release
-# Binary at: target/release/pkg-guard
+curl -fsSL https://raw.githubusercontent.com/suryan/pkg-guard/master/scripts/install.sh | bash
+```
 
-# Optional: install to PATH
+What it does:
+
+1. Ensures a Rust toolchain (`rustup` if `cargo` is missing)
+2. Clones/updates the repo under `~/.local/src/pkg-guard` (override with `--dir`)
+3. `cargo build --release`
+4. Installs to `~/.local/bin/pkg-guard` (override with `--prefix`)
+
+```bash
+# Common options
+bash scripts/install.sh --help
+bash scripts/install.sh --prefix ~/.local --with-shims --yes
+bash scripts/install.sh --ref master          # branch, tag, or commit
+bash scripts/install.sh --local               # build the current clone only
+PKG_GUARD_PREFIX=/usr/local sudo -E bash scripts/install.sh --yes   # system-wide (careful)
+```
+
+| Variable / flag | Default | Meaning |
+|-----------------|---------|---------|
+| `--prefix` / `PKG_GUARD_PREFIX` | `~/.local` | Binary at `$PREFIX/bin/pkg-guard` |
+| `--ref` / `PKG_GUARD_REF` | `master` | Git branch, tag, or commit |
+| `--repo` / `PKG_GUARD_REPO` | this GitHub repo | Clone URL |
+| `--dir` / `PKG_GUARD_DIR` | `~/.local/src/pkg-guard` | Checkout path |
+| `--with-shims` | off | Run `pkg-guard shim install` after |
+| `--yes` | off | Non-interactive rustup install |
+
+**Requirements:** Linux or macOS (or WSL2), `curl` + `git`, C linker
+(`build-essential` on Debian/Ubuntu, Xcode CLT on macOS), network for crates.io.
+
+### `cargo install` (Rust toolchain already present)
+
+```bash
+cargo install --git https://github.com/suryan/pkg-guard --locked
+```
+
+### From a local clone
+
+```bash
+git clone https://github.com/suryan/pkg-guard.git
+cd pkg-guard
+./scripts/install.sh --local
+# or:
+cargo build --release
 make install                    # → ~/.local/bin/pkg-guard
-# or: cp target/release/pkg-guard ~/.local/bin/
 ```
 
 ### Make shortcuts
@@ -28,12 +69,14 @@ make osv-update    # download local OSV dumps (ECOSYSTEMS=cargo optional)
 make osv-status
 ```
 
-### Verify Installation
+### Verify installation
 
 ```bash
 pkg-guard --version
 pkg-guard --help
 ```
+
+If the command is not found, add `~/.local/bin` to `PATH`.
 
 ## Blocklist layers
 
