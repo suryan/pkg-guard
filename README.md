@@ -287,11 +287,46 @@ scripts/
 └── precommit.sh     # Quality gate (90% line coverage)
 ```
 
+## Related tools
+
+pkg-guard sits between **local install gates** (especially for agents / MCP) and
+classic SCA. Most other tools cover one slice of that problem:
+
+| Tool | Focus | Relationship |
+|------|--------|----------------|
+| [Socket](https://socket.dev) | Malware, typosquats, install-script risk; commercial intel; CLI wrappers | Closest commercial “trust this package?” peer. SaaS-oriented; not a single self-hosted multi-ecosystem binary + MCP server. |
+| [Snyk](https://snyk.io) / Mend / Endor Labs / Aikido | Org SCA: CVEs, licenses, PRs, dashboards | Broader AppSec platforms. Strong on **known** vulns; not a lightweight local `uvx`/`npx` guardian. |
+| [OSV-Scanner](https://github.com/google/osv-scanner) | Multi-ecosystem advisories from [OSV](https://osv.dev) | Overlaps **scan / OSV**. Excellent CI CVE scanner; no typosquat UX, PM shims, or MCP. |
+| Dependabot / Renovate | Dependency update PRs | Maintenance bots; not pre-install policy. |
+| `npm audit` / [`pip-audit`](https://pypi.org/project/pip-audit/) / `cargo audit` | Per-ecosystem known vulns | Use after you already depend on something. Language-specific. |
+| Trivy / Grype | Containers + lockfiles (CVE-first) | Great for images/CI; not package-manager multicall or agent integration. |
+| [Typomania](https://github.com/rustfoundation/typomania) / [TypoGard](https://github.com/mt3443/typogard) | Typosquat detection (crates.io / npm-focused) | Same *name-similarity* family as pkg-guard’s typosquat engine; narrower product surface. |
+
+**pkg-guard’s niche** (rarely all in one open tool):
+
+- Single Rust binary (Python, npm, Java, Cargo)
+- Transparent **shims** for MCP-style launches (`uvx` / `npx` / `uv` by default)
+- **MCP server** for IDE agents
+- Typosquat + operator-owned name lists + **OSV** (local dump or API)
+- Optional hardened **container** install observation
+- **No embedded denylist** — feeds/custom lists are yours
+
+**Complementary stacking** (common in practice):
+
+```text
+CI:     OSV-Scanner / Snyk / pip-audit / npm audit   → known advisories
+Org:    Socket (or similar)                          → malware intel at scale
+Local:  pkg-guard CLI + shims + MCP                  → agent & dev install gates
+```
+
+They are not pure substitutes. See [docs/usage.md](docs/usage.md#related-tools) for
+the same map in the usage guide.
+
 ## Docs
 
 | Doc | Contents |
 |-----|----------|
-| [docs/usage.md](docs/usage.md) | CLI, shims, blocklists, OSV, env vars, troubleshooting |
+| [docs/usage.md](docs/usage.md) | CLI, shims, blocklists, OSV, related tools, troubleshooting |
 | [docs/architecture.md](docs/architecture.md) | Design overview |
 | [docs/development.md](docs/development.md) | Build, test, coverage |
 | [docs/product_requirements.md](docs/product_requirements.md) | Requirements |

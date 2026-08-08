@@ -777,6 +777,41 @@ if git diff --cached --name-only | grep -qE '(requirements.*\.txt|package\.json|
 fi
 ```
 
+## Related tools
+
+pkg-guard is not the only supply-chain tool. Most peers solve a **subset** of the
+problem (CVE SCA, malware intel, or typosquat math). Use this map when deciding
+what to run in CI vs on a developer / agent machine.
+
+| Tool | Focus | vs pkg-guard |
+|------|--------|----------------|
+| [Socket](https://socket.dev) | Malware, typosquats, suspicious install behavior; commercial feeds; wrappers | Closest “can I trust this package?” commercial product. Org/SaaS-oriented. |
+| [Snyk](https://snyk.io), Mend, Endor Labs, Aikido | Multi-language SCA, licenses, PR workflows | Platforms for known vulns + AppSec. Not a local multicall + MCP guardian. |
+| [OSV-Scanner](https://github.com/google/osv-scanner) | OSV advisories across ecosystems | Best free overlap for **lockfile CVE/`MAL-*` scans**. No shims, typosquat CLI, or MCP. |
+| Dependabot / Renovate | Automated dependency update PRs | Keep deps current; do not gate ad-hoc `uvx`/`npx` installs. |
+| `npm audit`, [`pip-audit`](https://pypi.org/project/pip-audit/), `cargo audit` / `cargo deny` | Per-language known vulnerabilities | After packages are already in the tree. |
+| Trivy, Grype | Images + lockfiles, CVE-first | CI/container scanning; different entrypoint. |
+| [Typomania](https://github.com/rustfoundation/typomania), [TypoGard](https://github.com/mt3443/typogard) | Typosquat detection (crates.io / npm) | Same detection family as pkg-guard’s name checks; specialized libraries. |
+
+**What pkg-guard optimizes for**
+
+1. Single binary: Python, npm, Java, Cargo  
+2. PATH **shims** (global default: `uvx` / `uv` / `npx` for MCP launches)  
+3. **MCP** tools for IDE agents  
+4. Typosquat + custom/feed **name** lists + **OSV** versions (local dump or API)  
+5. Optional Docker **install observation**  
+6. No denylist baked into the binary  
+
+**Stacking (recommended)**
+
+| Layer | Tooling |
+|-------|---------|
+| CI known advisories | OSV-Scanner and/or ecosystem audits (`pip-audit`, `npm audit`, …) |
+| Org malware intel | Socket or equivalent (if you need managed feeds) |
+| Local + agent installs | **pkg-guard** (CLI, shims, MCP) |
+
+Also see the summary in [README.md — Related tools](../README.md#related-tools).
+
 ## Environment variables
 
 | Variable | Purpose |
