@@ -1,68 +1,110 @@
 # pkg-guard
 
-A single-binary package security guardian that audits software packages for supply chain attacks, typosquatting, and malicious code across Python, npm, and Java ecosystems.
+A single-binary package security guardian for supply-chain risk: typosquatting,
+malicious packages, unpinned dependencies, and known advisories across **Python**,
+**npm**, **Java**, and **Cargo**.
 
 Built in Rust for performance, safety, and zero-dependency deployment.
 
 ## Features
 
-- **Typosquat Detection** — Levenshtein distance, Jaro-Winkler similarity, homoglyph detection, and common mutation pattern matching against 100+ popular packages per ecosystem
-- **Container Auditing** — Installs packages in isolated Docker containers with hardened security (cap-drop ALL, memory limits, PID limits) and monitors network, filesystem, and process activity
-- **Dependency Pinning Analysis** — Scans requirements.txt, package.json, pom.xml, and build.gradle for unpinned or loosely-pinned versions
-- **Lock File Scanning** — Checks package-lock.json, yarn.lock, Pipfile.lock, Cargo.lock, and requirements.txt against custom/feed name lists + OSV
-- **Registry Metadata** — Fetches package info from PyPI, npm, and Maven Central without installing anything
-- **MCP Server** — Runs as a Model Context Protocol server for IDE integration (Kiro, VS Code, etc.)
-- **Standalone CLI** — Use directly from the terminal for CI/CD pipelines and ad-hoc checks
+- **Typosquat detection** — Levenshtein, Jaro-Winkler, homoglyphs, and common mutation patterns against popular packages per ecosystem
+- **Container auditing** — Install packages in hardened Docker containers (cap-drop ALL, memory/PID limits) and observe install behavior
+- **Package-manager shims** — Transparent wrappers for `pip` / `npm` / `npx` / `uv` / `uvx` / `cargo` (and friends) that gate installs before the real tool runs
+- **Dependency pinning** — Flag unpinned or loose versions in `requirements.txt`, `package.json`, `pom.xml`, and `build.gradle`
+- **Lockfile scanning** — Check lockfiles against custom/feed name lists + OSV advisories
+- **Registry metadata** — Query PyPI, npm, Maven Central, and crates.io without installing
+- **MCP server** — Model Context Protocol integration for IDE agents (Kiro, VS Code, etc.)
+- **Standalone CLI** — CI/CD and ad-hoc use from a single binary
 
-## Quick Start
+## Quick start
 
 ```bash
-# Build
+# Build & install the binary
 cargo build --release
+make install                          # → ~/.local/bin/pkg-guard
 
-# Check a package for typosquatting
+# Check a package for typosquatting / blocklist hits
 pkg-guard check -e python -p reqeusts
-# → BLOCKED if on custom list or feed cache (no denylist embedded in the binary)
 
-# Scan your dependencies for pinning issues
+# Pin analysis on a manifest
 pkg-guard pin -f requirements.txt
-# → WARNING: 6 dependencies are not pinned to exact versions
 
-# Full audit with container isolation
+# Full audit (optional Docker isolation)
 pkg-guard audit -e npm -p express -v 4.18.2
-# → PASS — safe to install
 
-# Scan a lock file for known malicious packages
+# Scan a lockfile (blocklist + OSV)
 pkg-guard scan -f package-lock.json
-# → CLEAN — no known malicious packages found
 
-# Audit an entire project tree (manifests + lockfiles)
+# Whole-repo pass (manifests + lockfiles)
 pkg-guard project -p .
-# → WARNING/CRITICAL/CLEAN summary across the repo
 
-# Custom blocklist (block brand-new threats without waiting for feeds)
-pkg-guard blocklist init              # scaffold ~/.config/pkg-guard/blocklist.json
-pkg-guard blocklist status
-
-# Load name blocklist from a remote feed (nothing embedded in the binary)
+# Blocklist & feeds (nothing embedded in the binary)
+pkg-guard blocklist init
 pkg-guard update-db --feed https://example.com/blocklist.json
 
-# Start as MCP server (for IDE integration)
+# MCP server for IDEs
 pkg-guard serve
-
-# Transparent PM shims — see docs/usage.md "Best setup (recommended)"
-make install
-pkg-guard shim install            # → ~/.local/share/pkg-guard/shims  (not ~/.local/bin)
-# Leave real uv/uvx/npx where installers put them. Put shims FIRST on PATH:
-export PATH="$HOME/.local/share/pkg-guard/shims:$PATH"
-# Persist via ~/.config/pkg-guard/shim.env + source from bashrc *and* profile
-pkg-guard shim status             # which -a uvx → shim first, real second
-# PKG_GUARD_SHIM_MODE=enforce|warn|off
 ```
+
+## Package-manager shims
+
+Shims make day-to-day installs safer without changing how you invoke tools.
+When you run `pip install`, `npm install`, `uvx some-mcp-server`, etc., the
+shim runs **policy checks first** (custom/feed blocklist + OSV when a version
+is known), then `exec`s the **real** package manager.
+
+| Tool | What gets gated |
+|------|-----------------|
+| `pip` / `pip3` | `install` package lines |
+| `npm` / `yarn` / `pnpm` | install / add style commands |
+| `npx` / `pnpm dlx` / `yarn dlx` | package + **transitive** runtime deps |
+| `uv` / `uvx` | tool run / install forms; `uvx` expands transitive deps |
+| `cargo` | `add` / install-like forms |
+| `mvn` / `gradle` | multicall names reserved (see usage guide) |
+
+This is especially useful for **MCP servers** started as `uvx pkg==…` or
+`npx -y pkg@…` — those resolve transitive dependencies you never type by hand.
+
+### Setup (recommended)
+
+**Rule:** put shims in a **dedicated directory first on `PATH`**. Leave real
+`uv` / `uvx` / `npx` / `pip` where their installers put them. Do **not** install
+shims into `~/.local/bin` if that is where the real tools live.
+
+```bash
+make install
+pkg-guard shim install
+# → ~/.local/share/pkg-guard/shims/{pip,pip3,npm,npx,uvx,uv,cargo,…}
+# subset:  pkg-guard shim install --tools uvx,uv,npx
+
+# Prepend shims on PATH (persist via ~/.config/pkg-guard/shim.env)
+export PATH="$HOME/.local/share/pkg-guard/shims:$PATH"
+
+pkg-guard shim status
+which -a uvx   # first hit = shim; second hit = real tool
+```
+
+Source `shim.env` from **both** `~/.bashrc` and `~/.profile` (login shells often
+prepend `~/.local/bin` after bashrc). For IDE/MCP hosts, set the same `PATH`
+in the host environment — many skip shell profiles.
+
+| Mode | Env | Behavior |
+|------|-----|----------|
+| **enforce** (default) | `PKG_GUARD_SHIM_MODE=enforce` | Block on policy failure (exit 2) |
+| **warn** | `PKG_GUARD_SHIM_MODE=warn` | Warn, still run the real tool |
+| **off** | `PKG_GUARD_SHIM_MODE=off` | Fully transparent (no checks) |
+
+```bash
+pkg-guard shim uninstall   # removes shim links only; real tools untouched
+```
+
+Full guide (MCP PATH, anti-patterns, troubleshooting):
+[docs/usage.md — Transparent package-manager shims](docs/usage.md#transparent-package-manager-shims).
 
 ## Blocklist layers
 
-**The binary embeds no name denylist.** Names come only from lists you load:
+**The binary embeds no name denylist.** Names come only from lists you load.
 
 **Order:** custom → feed cache (`update-db`)
 
@@ -76,14 +118,12 @@ pkg-guard shim status             # which -a uvx → shim first, real second
 
 ```bash
 pkg-guard blocklist init
-# edit JSON, then:
 pkg-guard blocklist status
 ```
 
-### Feed cache (required for shared name lists)
+### Feed cache (shared name lists)
 
 ```bash
-# Host data/blocklist/example-feed.json (or your own) and load it:
 pkg-guard update-db --feed https://your-host/blocklist.json
 # or: PKG_GUARD_FEED_URLS=url1,url2
 ```
@@ -97,7 +137,7 @@ Cache: `~/.cache/pkg-guard/blocklist-cache.json` (override with `PKG_GUARD_CACHE
 **Local dump (recommended for offline/CI):**
 
 ```bash
-pkg-guard osv update              # download ecosystem dumps + build index
+pkg-guard osv update
 pkg-guard osv status
 PKG_GUARD_OSV_MODE=local pkg-guard scan -f Cargo.lock
 ```
@@ -109,11 +149,11 @@ Malware / CRITICAL / HIGH → BLOCK; other hits → WARN.
 
 ### What *is* embedded
 
-- `data/blocklist/popular.json` — **legitimate** package names for typosquat similarity only (not a denylist)
-- `data/blocklist/default-feeds.json` — optional default **feed URLs** (enable your own hosts)
+- `data/blocklist/popular.json` — **legitimate** names for typosquat similarity only (not a denylist)
+- `data/blocklist/default-feeds.json` — optional default **feed URLs**
 - `data/blocklist/example-feed.json` — sample denylist document to **host yourself** (not compiled in)
 
-## MCP Integration
+## MCP integration
 
 Add to your Kiro/IDE MCP configuration:
 
@@ -130,35 +170,39 @@ Add to your Kiro/IDE MCP configuration:
 }
 ```
 
-The `audit_package` tool is intentionally not auto-approved since it launches Docker containers.
+`audit_package` is intentionally not auto-approved (it may launch Docker containers).
 
-## MCP Tools
+When MCP servers themselves launch via `uvx` / `npx`, put the **shim dir first**
+on that host’s `PATH` (and prefer bare command names over absolute paths to the
+real binary) so the gate is not skipped.
+
+### MCP tools
 
 | Tool | Description |
 |------|-------------|
-| `audit_package` | Full audit with container isolation |
+| `audit_package` | Full audit with optional container isolation |
 | `check_typosquat` | Typosquat detection against popular packages |
-| `pin_dependencies` | Scan dependency files for unpinned versions |
-| `scan_lockfile` | Lockfiles: custom/feed blocklists + OSV advisories |
-| `get_package_metadata` | Fetch registry metadata without installing |
-| `audit_project` | Scan an entire project tree for pins + malicious packages |
-| `blocklist_status` | Custom / feed-cache status (no embedded denylist) |
-| `update_db` | Refresh feed cache from remote feed URLs |
+| `pin_dependencies` | Scan manifests for unpinned versions |
+| `scan_lockfile` | Lockfiles: custom/feed blocklists + OSV |
+| `get_package_metadata` | Registry metadata without installing |
+| `audit_project` | Whole-tree pins + malicious package scan |
+| `blocklist_status` | Custom / feed-cache status |
+| `update_db` | Refresh feed cache from remote URLs |
 
-## Supported Ecosystems
+## Supported ecosystems
 
-| Ecosystem | Registry | Dependency Files | Lock Files |
-|-----------|----------|-----------------|------------|
-| Python | PyPI | requirements.txt | Pipfile.lock |
+| Ecosystem | Registry | Dependency files | Lock files |
+|-----------|----------|------------------|------------|
+| Python | PyPI | requirements.txt | Pipfile.lock, requirements.txt |
 | npm | npmjs.org | package.json | package-lock.json, yarn.lock |
 | Java | Maven Central | pom.xml, build.gradle | — |
 | Cargo / Rust | crates.io | — | Cargo.lock |
 
 ## Requirements
 
-- **Rust 1.70+** for building
-- **Docker** (optional) for container auditing — if Docker is unavailable, the audit tool skips container checks and still performs typosquat + metadata analysis
-- **cargo-llvm-cov** + `llvm-tools-preview` for the precommit coverage gate (see [docs/development.md](docs/development.md))
+- **Rust 1.70+** to build
+- **Docker** (optional) for container auditing — without it, audit still runs typosquat + metadata/OSV checks
+- **cargo-llvm-cov** + `llvm-tools-preview` for the precommit coverage gate ([docs/development.md](docs/development.md))
 
 ## Development checks
 
@@ -176,29 +220,35 @@ make dogfood       # scan this repo's Cargo.lock
 
 Or: `bash scripts/precommit.sh`
 
-Coverage is measured with `cargo llvm-cov` on library modules (`main.rs` excluded). Override the floor with `PKG_GUARD_MIN_COVERAGE` only for local experiments.
+Coverage uses `cargo llvm-cov` on library modules (`main.rs` excluded). Override
+the floor with `PKG_GUARD_MIN_COVERAGE` only for local experiments.
 
-## Project Structure
+## Project structure
 
 ```
 src/
-├── main.rs          # CLI entry point (clap) + multicall shim dispatch
+├── main.rs          # CLI entry (clap) + multicall shim dispatch
 ├── mcp/             # MCP JSON-RPC server
 ├── typosquat/       # Typosquat detection engine
 ├── registry/        # PyPI, npm, Maven Central, crates.io clients
-├── parsers/         # Dependency file parsers
+├── parsers/         # Dependency / lockfile parsers
 ├── audit/           # Container audit orchestrator (bollard)
 ├── project/         # Whole-repo manifest + lockfile scanner
 ├── osv/             # OSV.dev version advisories
-├── shim/            # Transparent pip/npm/cargo multicall wrappers
+├── shim/            # Transparent pip/npm/uvx/cargo multicall wrappers
 └── data/            # Blocklist stack + shared types
 data/blocklist/      # popular.json (typosquat); example-feed.json (host yourself)
 scripts/precommit.sh # Quality gate (90% line coverage)
 ```
 
-Also: `pkg-guard shim install|status|uninstall` for PATH-level install gates.
-**Best layout:** dedicated shim dir first on `PATH`; never overwrite real tools in
-`~/.local/bin`. Full guide: [docs/usage.md](docs/usage.md#best-setup-recommended).
+## Docs
+
+| Doc | Contents |
+|-----|----------|
+| [docs/usage.md](docs/usage.md) | CLI, shims, blocklists, OSV, env vars, troubleshooting |
+| [docs/architecture.md](docs/architecture.md) | Design overview |
+| [docs/development.md](docs/development.md) | Build, test, coverage |
+| [docs/product_requirements.md](docs/product_requirements.md) | Requirements |
 
 ## License
 
