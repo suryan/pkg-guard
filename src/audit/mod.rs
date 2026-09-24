@@ -108,6 +108,7 @@ pub async fn audit_package(
                 advisories: vec![],
                 error: Some(e.to_string()),
                 source: None,
+                recommended_version: None,
             })
         }
     };
@@ -130,7 +131,7 @@ pub async fn audit_package(
     let mut status = determine_status(&typosquat_result, container_audit.as_ref(), &mut warnings);
     status = elevate_with_osv(status, osv_result.as_ref());
 
-    let recommendation = match status {
+    let mut recommendation = match status {
         AuditStatus::Pass => "SAFE to install — pin exact version with hash".to_string(),
         AuditStatus::Warning => {
             "REVIEW REQUIRED — proceed with caution after manual review".to_string()
@@ -138,6 +139,12 @@ pub async fn audit_package(
         AuditStatus::Blocked => "DO NOT INSTALL — security risks detected".to_string(),
         AuditStatus::Failed => "FAILED — could not complete audit".to_string(),
     };
+    if let Some(fix) = osv_result
+        .as_ref()
+        .and_then(osv::OsvQueryResult::remediation)
+    {
+        recommendation = format!("{recommendation}; {fix}");
+    }
 
     Ok(AuditResult {
         status,
@@ -234,10 +241,17 @@ fn apply_osv_warnings(osv: Option<&osv::OsvQueryResult>, warnings: &mut Vec<Stri
         } else {
             "advisory"
         };
+        let fixed = adv
+            .fixed_in
+            .as_ref()
+            .map_or(String::new(), |v| format!(" [fixed in {v}]"));
         warnings.push(format!(
-            "OSV {kind} {} ({}) — {}",
+            "OSV {kind} {} ({}){fixed} — {}",
             adv.id, adv.severity, adv.summary
         ));
+    }
+    if let Some(fix) = osv.remediation() {
+        warnings.push(format!("OSV remediation: {fix}"));
     }
 }
 

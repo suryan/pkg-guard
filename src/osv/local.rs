@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use super::version::version_matches_range;
+use super::version::{min_clear_version, version_matches_range, AffectedSpec};
 use super::{osv_ecosystem, osv_package_name, OsvAdvisory, OsvQueryResult};
 use crate::data::feed_cache;
 use crate::data::Ecosystem;
@@ -67,9 +67,16 @@ pub struct OsvMeta {
     pub source: String,
 }
 
+/// Bump when the index layout or parsing changes, forcing a rebuild even if
+/// the remote dump is unchanged. 2: multi-window OSV ranges are split.
+pub const INDEX_FORMAT: u32 = 2;
+
 /// Per-ecosystem meta.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EcoMeta {
+    /// [`INDEX_FORMAT`] the index was built with (0 = before versioning).
+    #[serde(default)]
+    pub index_format: u32,
     pub advisory_count: usize,
     pub package_count: usize,
     pub updated_at: Option<String>,
@@ -312,9 +319,19 @@ pub fn query_package(
     let name = osv_package_name(package_name);
     let index = load_index(eco)?;
     let mut advisories = Vec::new();
+    let mut recommended_version = None;
 
     if let Some(list) = lookup_advisories(&index, ecosystem, &name) {
-        for adv in list {
+        // Every advisory for the package (not just matching ones): the
+        // recommended upgrade must not land in a range that skips `version`.
+        let specs: Vec<AffectedSpec> = list
+            .iter()
+            .map(|a| AffectedSpec {
+                versions: a.versions.clone(),
+                ranges: a.ranges.clone(),
+            })
+            .collect();
+        for (adv, spec) in list.iter().zip(&specs) {
             if advisory_matches(adv, version) {
                 advisories.push(OsvAdvisory {
                     id: adv.id.clone(),
@@ -325,8 +342,13 @@ pub fn query_package(
                     version: version.to_string(),
                     ecosystem: eco.to_string(),
                     details_url: Some(format!("https://osv.dev/vulnerability/{}", adv.id)),
+                    fixed_in: min_clear_version(version, &[spec]),
                 });
             }
+        }
+        if !advisories.is_empty() {
+            let all: Vec<&AffectedSpec> = specs.iter().collect();
+            recommended_version = min_clear_version(version, &all);
         }
     }
 
@@ -342,6 +364,7 @@ pub fn query_package(
         advisories,
         error: None,
         source: Some("local".into()),
+        recommended_version,
     })
 }
 
@@ -464,6 +487,75 @@ mod tests {
             },
             "1.0.0"
         ));
+
+        std::env::remove_var("PKG_GUARD_CACHE_DIR");
+        clear_memory_cache();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn adv(id: &str, versions: &[&str], ranges: &[(&str, Option<&str>)]) -> IndexedAdvisory {
+        IndexedAdvisory {
+            id: id.into(),
+            summary: id.into(),
+            severity: "HIGH".into(),
+            is_malware: id.starts_with("MAL-"),
+            versions: versions.iter().map(ToString::to_string).collect(),
+            ranges: ranges
+                .iter()
+                .map(|(i, f)| IndexedRange {
+                    introduced: (*i).into(),
+                    fixed: f.map(Into::into),
+                    last_affected: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_fixed_in_and_recommended_version() {
+        let dir = std::env::temp_dir().join(format!("pkg-guard-osv-fix-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        std::env::set_var("PKG_GUARD_CACHE_DIR", &dir);
+        clear_memory_cache();
+
+        let mut index = EcosystemIndex::default();
+        index.packages.insert(
+            "fixme".into(),
+            vec![
+                adv("GHSA-A", &[], &[("0", Some("2.32.0"))]),
+                // Does not affect 2.31.0 but covers A's fix.
+                adv("GHSA-B", &[], &[("2.32.0", Some("2.32.4"))]),
+            ],
+        );
+        index
+            .packages
+            .insert("nofix".into(), vec![adv("GHSA-C", &[], &[("0", None)])]);
+        index
+            .packages
+            .insert("hijacked".into(), vec![adv("MAL-D", &["1.0.1"], &[])]);
+        save_index("crates.io", &index).unwrap();
+        clear_memory_cache();
+
+        let r = query_package(Ecosystem::Cargo, "fixme", "2.31.0").unwrap();
+        assert_eq!(r.advisories.len(), 1);
+        assert_eq!(r.advisories[0].fixed_in.as_deref(), Some("2.32.0"));
+        assert_eq!(r.recommended_version.as_deref(), Some("2.32.4"));
+        assert!(r.remediation().unwrap().contains("upgrade fixme to 2.32.4"));
+
+        let clean = query_package(Ecosystem::Cargo, "fixme", "2.40.0").unwrap();
+        assert_eq!(clean.recommended_version, None);
+        assert_eq!(clean.remediation(), None);
+
+        let r = query_package(Ecosystem::Cargo, "nofix", "1.0.0").unwrap();
+        assert_eq!(r.recommended_version, None);
+        assert!(r.remediation().unwrap().contains("no fixed version"));
+
+        let r = query_package(Ecosystem::Cargo, "hijacked", "1.0.1").unwrap();
+        assert!(r
+            .remediation()
+            .unwrap()
+            .starts_with("remove hijacked@1.0.1"));
 
         std::env::remove_var("PKG_GUARD_CACHE_DIR");
         clear_memory_cache();

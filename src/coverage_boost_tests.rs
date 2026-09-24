@@ -611,7 +611,7 @@ async fn transitive_npm_unversioned_and_with_deps() {
     let expanded = crate::shim::transitive::expand_with_transitive(Ecosystem::Npm, &roots)
         .await
         .expect("npm expand latest");
-    assert!(expanded.iter().any(|p| p.name == "left-pad"));
+    assert!(expanded.packages.iter().any(|p| p.name == "left-pad"));
 
     // Package with runtime deps → walks npm_dependencies (ranges → version None)
     let roots = vec![PackageRef {
@@ -622,10 +622,10 @@ async fn transitive_npm_unversioned_and_with_deps() {
         .await
         .expect("npm expand deps");
     assert!(
-        expanded.len() > 1,
+        expanded.packages.len() > 1,
         "debug should pull ms (or similar): {expanded:?}"
     );
-    assert!(expanded.iter().any(|p| p.name == "debug"));
+    assert!(expanded.packages.iter().any(|p| p.name == "debug"));
 
     // Java passthrough
     let j = crate::shim::transitive::expand_with_transitive(
@@ -637,7 +637,7 @@ async fn transitive_npm_unversioned_and_with_deps() {
     )
     .await
     .unwrap();
-    assert_eq!(j.len(), 1);
+    assert_eq!(j.packages.len(), 1);
 }
 
 // ─── Gate: empty allow, lockfile scan warn/block paths ───────────────────────

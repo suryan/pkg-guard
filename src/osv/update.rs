@@ -9,10 +9,15 @@ use serde::Deserialize;
 use tracing::{info, warn};
 
 use super::local::{
-    clear_memory_cache, save_index, save_meta, EcoMeta, EcosystemIndex, IndexedAdvisory,
-    IndexedRange, OsvMeta,
+    clear_memory_cache, save_index, save_meta, EcoMeta, EcosystemIndex, IndexedAdvisory, OsvMeta,
+    INDEX_FORMAT,
 };
-use super::{map_severity_from_raw, osv_ecosystem, OsvSeverity, OsvVulnLike};
+use super::{
+    map_severity_from_raw, osv_ecosystem, parse_ranges, OsvAffected as DumpAffected, OsvSeverity,
+    OsvVulnLike,
+};
+#[cfg(test)]
+use super::{OsvEvent as DumpEvent, OsvRange as DumpRange};
 use crate::data::Ecosystem;
 
 const DEFAULT_DUMP_BASE: &str = "https://storage.googleapis.com/osv-vulnerabilities";
@@ -292,6 +297,9 @@ enum UpdateOneOutcome {
 /// True if local meta matches remote HEAD identity.
 #[must_use]
 pub fn is_remote_match(local: &EcoMeta, remote: &RemoteDumpMeta) -> bool {
+    if local.index_format < INDEX_FORMAT {
+        return false;
+    }
     // Prefer ETag
     if let (Some(a), Some(b)) = (&local.etag, &remote.etag) {
         if !a.is_empty() && a == b {
@@ -401,6 +409,7 @@ async fn update_one(
     save_index(osv_eco, &index)?;
 
     let eco_meta = EcoMeta {
+        index_format: INDEX_FORMAT,
         advisory_count: index.advisory_count,
         package_count: index.package_count,
         updated_at: Some(unix_now()),
@@ -624,41 +633,6 @@ pub fn build_index_from_zip(osv_eco: &str, zip_bytes: &[u8]) -> Result<Ecosystem
     })
 }
 
-fn parse_ranges(ranges: Option<&Vec<DumpRange>>) -> Vec<IndexedRange> {
-    let Some(ranges) = ranges else {
-        return vec![];
-    };
-    let mut out = Vec::new();
-    for r in ranges {
-        // Prefer ECOSYSTEM and SEMVER; skip GIT for package version queries
-        let rtype = r.type_.as_deref().unwrap_or("");
-        if rtype == "GIT" {
-            continue;
-        }
-        let events = r.events.as_deref().unwrap_or(&[]);
-        let mut introduced = "0".to_string();
-        let mut fixed = None;
-        let mut last_affected = None;
-        for ev in events {
-            if let Some(v) = &ev.introduced {
-                introduced.clone_from(v);
-            }
-            if let Some(v) = &ev.fixed {
-                fixed = Some(v.clone());
-            }
-            if let Some(v) = &ev.last_affected {
-                last_affected = Some(v.clone());
-            }
-        }
-        out.push(IndexedRange {
-            introduced,
-            fixed,
-            last_affected,
-        });
-    }
-    out
-}
-
 fn unix_now() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -678,33 +652,6 @@ struct DumpVuln {
     affected: Option<Vec<DumpAffected>>,
     severity: Option<Vec<DumpSeverity>>,
     database_specific: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DumpAffected {
-    package: Option<DumpPackage>,
-    ranges: Option<Vec<DumpRange>>,
-    versions: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DumpPackage {
-    name: Option<String>,
-    ecosystem: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DumpRange {
-    #[serde(rename = "type")]
-    type_: Option<String>,
-    events: Option<Vec<DumpEvent>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DumpEvent {
-    introduced: Option<String>,
-    fixed: Option<String>,
-    last_affected: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -749,6 +696,41 @@ mod tests {
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].introduced, "1.0.0");
         assert_eq!(r[0].fixed.as_deref(), Some("1.2.0"));
+    }
+
+    #[test]
+    fn test_parse_ranges_splits_multiple_windows() {
+        let ev = |i: Option<&str>, f: Option<&str>, l: Option<&str>| DumpEvent {
+            introduced: i.map(Into::into),
+            fixed: f.map(Into::into),
+            last_affected: l.map(Into::into),
+        };
+        let ranges = vec![DumpRange {
+            type_: Some("ECOSYSTEM".into()),
+            events: Some(vec![
+                ev(Some("0"), None, None),
+                ev(None, Some("1.26.19"), None),
+                ev(Some("2.0.0"), None, None),
+                ev(Some("2.0.1"), None, None),
+                ev(None, Some("2.2.2"), None),
+                ev(Some("3.0.0"), None, None),
+                ev(None, None, Some("3.1.0")),
+                ev(Some("4.0.0"), None, None),
+            ]),
+        }];
+        let r: Vec<_> = parse_ranges(Some(&ranges))
+            .into_iter()
+            .map(|r| (r.introduced, r.fixed, r.last_affected))
+            .collect();
+        assert_eq!(
+            r,
+            [
+                ("0".into(), Some("1.26.19".into()), None),
+                ("2.0.0".into(), Some("2.2.2".into()), None),
+                ("3.0.0".into(), None, Some("3.1.0".into())),
+                ("4.0.0".into(), None, None),
+            ]
+        );
     }
 
     #[test]
@@ -814,6 +796,7 @@ mod tests {
     #[test]
     fn test_is_remote_match_etag() {
         let local = EcoMeta {
+            index_format: INDEX_FORMAT,
             etag: Some("\"abc\"".into()),
             last_modified: Some("Mon, 01 Jan 2024 00:00:00 GMT".into()),
             content_length: Some(100),
@@ -837,6 +820,14 @@ mod tests {
             content_length: Some(1),
         };
         assert!(!is_remote_match(&local, &remote3));
+        let old_format = EcoMeta {
+            index_format: 0,
+            ..local
+        };
+        assert!(
+            !is_remote_match(&old_format, &remote),
+            "stale format rebuilds"
+        );
     }
 
     #[test]

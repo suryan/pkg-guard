@@ -175,6 +175,7 @@ pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
                 .and_then(|r| r.source.clone())
                 .unwrap_or_else(|| "unknown".into());
             result.osv_backend = Some(backend);
+            result.upgrade_suggestions = scan_status::upgrade_suggestions(&batch);
             let mut osv_findings = Vec::new();
             for item in batch {
                 for adv in item.advisories {
@@ -191,6 +192,7 @@ pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
                 result.packages_osv_checked,
                 result.osv_backend.as_deref(),
             );
+            scan_status::append_fix_summary(&mut result);
         }
         Err(e) => {
             result.osv_backend = Some("failed".into());

@@ -224,9 +224,11 @@ fn test_elevate_and_osv_helpers() {
             version: "1".into(),
             ecosystem: "PyPI".into(),
             details_url: None,
+            fixed_in: None,
         }],
         error: None,
         source: Some("test".into()),
+        recommended_version: None,
     };
     assert!(matches!(
         elevate_with_osv(AuditStatus::Pass, Some(&osv)),
@@ -264,6 +266,7 @@ fn test_elevate_and_osv_helpers() {
             advisories: vec![],
             error: Some("net".into()),
             source: None,
+            recommended_version: None,
         }),
         &mut warnings,
     );
@@ -283,13 +286,22 @@ fn test_elevate_and_osv_helpers() {
                 version: "1".into(),
                 ecosystem: "PyPI".into(),
                 details_url: None,
+                fixed_in: Some("1.5".into()),
             }],
             error: None,
             source: Some("local".into()),
+            recommended_version: Some("1.6".into()),
         }),
         &mut warnings,
     );
-    assert!(warnings[0].contains("advisory"));
+    assert!(
+        warnings[0].contains("advisory GHSA-1 (MEDIUM) [fixed in 1.5]"),
+        "{warnings:?}"
+    );
+    assert!(
+        warnings[1].contains("OSV remediation: upgrade p to 1.6"),
+        "{warnings:?}"
+    );
 }
 
 #[test]

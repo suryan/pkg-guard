@@ -5,8 +5,8 @@
 //!   `uvx --from some-pkg cmd`
 //!
 //! That pulls the named package **and** its transitive deps from `PyPI`.
-//! We gate the **named top-level package(s)** (blocklist + OSV when versioned).
-//! Full tree resolution is still a gap — prefer pinned versions and local OSV.
+//! We gate the **named top-level package(s)** (blocklist + OSV when versioned);
+//! the gate adds transitive deps via a bounded crawl (see `transitive`).
 
 use super::{PackageRef, Plan};
 use crate::data::Ecosystem;

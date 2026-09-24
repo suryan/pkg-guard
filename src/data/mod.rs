@@ -225,8 +225,29 @@ pub struct ScanResult {
     /// Number of OSV advisories
     #[serde(default)]
     pub osv_count: usize,
+    /// One entry per vulnerable package: what to upgrade to (or remove)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub upgrade_suggestions: Vec<UpgradeSuggestion>,
     /// Overall status message
     pub status: String,
+}
+
+/// Fix advice for one vulnerable package in a scanned lockfile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpgradeSuggestion {
+    /// OSV ecosystem (`PyPI`, `npm`, …)
+    pub ecosystem: String,
+    /// Package name
+    pub package: String,
+    /// Version in the lockfile
+    pub current: String,
+    /// Lowest version with no known advisories (absent when no fix exists)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommended: Option<String>,
+    /// Advisory ids affecting `current`
+    pub advisories: Vec<String>,
+    /// Human-readable advice
+    pub advice: String,
 }
 
 /// A finding of a malicious package in a lock file

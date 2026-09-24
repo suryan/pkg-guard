@@ -15,8 +15,10 @@ mod remote;
 mod update;
 mod version;
 
+pub(crate) use local::IndexedRange;
 pub use local::{has_index, status_snapshot};
 pub use update::{auto_update_enabled, ensure_fresh, status_with_remote, update_osv};
+pub(crate) use version::{min_clear_version, AffectedSpec};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -44,6 +46,10 @@ pub struct OsvAdvisory {
     /// Optional details URL
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details_url: Option<String>,
+    /// Lowest version that fixes this advisory for the queried version (none
+    /// when unfixed, e.g. malware or open-ended ranges).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_in: Option<String>,
 }
 
 /// Aggregate result of an OSV query for one package.
@@ -57,6 +63,10 @@ pub struct OsvQueryResult {
     /// `local` or `online` when known
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// Lowest version clear of every known advisory (only when `advisories`
+    /// is non-empty and a fix exists).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_version: Option<String>,
 }
 
 impl OsvQueryResult {
@@ -70,6 +80,28 @@ impl OsvQueryResult {
         self.advisories
             .iter()
             .any(|a| matches!(a.severity.as_str(), "CRITICAL" | "HIGH") || a.is_malware)
+    }
+
+    /// Human-readable fix advice, `None` when there are no advisories.
+    #[must_use]
+    pub fn remediation(&self) -> Option<String> {
+        if self.advisories.is_empty() {
+            return None;
+        }
+        Some(match &self.recommended_version {
+            Some(v) => format!(
+                "upgrade {} to {v}, the lowest version with no known advisories",
+                self.package
+            ),
+            None if self.has_malware() => format!(
+                "remove {}@{}: malicious, no known safe version",
+                self.package, self.version
+            ),
+            None => format!(
+                "no fixed version of {} known; consider an alternative package",
+                self.package
+            ),
+        })
     }
 }
 
@@ -170,13 +202,119 @@ fn cvss_label(score: f64) -> String {
 }
 
 /// API / dump vuln shape used by remote mapping.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct OsvVuln {
     pub id: Option<String>,
     pub summary: Option<String>,
     pub details: Option<String>,
     pub severity: Option<Vec<OsvSeverity>>,
     pub database_specific: Option<serde_json::Value>,
+    #[serde(default)]
+    pub affected: Option<Vec<OsvAffected>>,
+}
+
+/// One `affected[]` entry (subset of the OSV schema), shared by dump + API.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct OsvAffected {
+    pub package: Option<OsvAffectedPackage>,
+    pub ranges: Option<Vec<OsvRange>>,
+    pub versions: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct OsvAffectedPackage {
+    pub name: Option<String>,
+    pub ecosystem: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct OsvRange {
+    #[serde(rename = "type")]
+    pub type_: Option<String>,
+    pub events: Option<Vec<OsvEvent>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct OsvEvent {
+    pub introduced: Option<String>,
+    pub fixed: Option<String>,
+    pub last_affected: Option<String>,
+}
+
+/// Split OSV range events into introduced→fixed windows (GIT ranges skipped:
+/// commit hashes are not package versions).
+///
+/// One range may hold several windows, e.g. `introduced 0, fixed 1.26.19,
+/// introduced 2.0.0, fixed 2.2.2` (backported fix lines).
+pub(crate) fn parse_ranges(ranges: Option<&Vec<OsvRange>>) -> Vec<IndexedRange> {
+    let Some(ranges) = ranges else {
+        return vec![];
+    };
+    let mut out = Vec::new();
+    for r in ranges {
+        if r.type_.as_deref() == Some("GIT") {
+            continue;
+        }
+        let mut open: Option<String> = None;
+        for ev in r.events.as_deref().unwrap_or(&[]) {
+            if let Some(v) = &ev.introduced {
+                // Already inside a window: a later `introduced` changes nothing.
+                open.get_or_insert_with(|| v.clone());
+            }
+            let close = |fixed: Option<&String>, last: Option<&String>| IndexedRange {
+                introduced: open.clone().unwrap_or_else(|| "0".into()),
+                fixed: fixed.cloned(),
+                last_affected: last.cloned(),
+            };
+            if ev.fixed.is_some() || ev.last_affected.is_some() {
+                out.push(close(ev.fixed.as_ref(), ev.last_affected.as_ref()));
+                open = None;
+            }
+        }
+        if let Some(introduced) = open {
+            out.push(IndexedRange {
+                introduced,
+                fixed: None,
+                last_affected: None,
+            });
+        }
+    }
+    out
+}
+
+/// `PyPI` names compare after PEP 503 normalisation; others exactly.
+fn same_package(a: &str, b: &str, ecosystem: &str) -> bool {
+    if ecosystem != "PyPI" {
+        return a == b;
+    }
+    let norm = |s: &str| {
+        s.to_ascii_lowercase()
+            .split(['-', '_', '.'])
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("-")
+    };
+    norm(a) == norm(b)
+}
+
+/// Affected versions/ranges of `v` for one package (entries for other
+/// packages or ecosystems in the same record are ignored).
+pub(crate) fn vuln_spec(v: &OsvVuln, package: &str, ecosystem: &str) -> AffectedSpec {
+    let mut spec = AffectedSpec::default();
+    for a in v.affected.iter().flatten() {
+        let Some(p) = &a.package else { continue };
+        if p.ecosystem.as_deref() != Some(ecosystem)
+            || !p
+                .name
+                .as_deref()
+                .is_some_and(|n| same_package(n, package, ecosystem))
+        {
+            continue;
+        }
+        spec.versions.extend(a.versions.iter().flatten().cloned());
+        spec.ranges.extend(parse_ranges(a.ranges.as_ref()));
+    }
+    spec
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -211,6 +349,7 @@ pub(crate) fn map_vuln(v: &OsvVuln, package: &str, version: &str, ecosystem: &st
         .take(280)
         .collect();
 
+    let spec = vuln_spec(v, package, ecosystem);
     OsvAdvisory {
         id: id.clone(),
         summary,
@@ -220,6 +359,7 @@ pub(crate) fn map_vuln(v: &OsvVuln, package: &str, version: &str, ecosystem: &st
         version: version.to_string(),
         ecosystem: ecosystem.to_string(),
         details_url: Some(format!("https://osv.dev/vulnerability/{id}")),
+        fixed_in: min_clear_version(version, &[&spec]),
     }
 }
 
@@ -313,10 +453,40 @@ mod tests {
             details: None,
             severity: None,
             database_specific: None,
+            affected: None,
         };
         let a = map_vuln(&v, "pkg", "1.0.0", "npm");
         assert!(a.is_malware);
         assert_eq!(a.severity, "CRITICAL");
+    }
+
+    #[test]
+    fn test_vuln_spec_filters_package_and_skips_git() {
+        let v: OsvVuln = serde_json::from_value(serde_json::json!({
+            "id": "GHSA-x",
+            "affected": [
+                {"package": {"name": "Foo_Bar", "ecosystem": "PyPI"},
+                 "versions": ["1.0.0"],
+                 "ranges": [
+                    {"type": "GIT", "events": [{"introduced": "0"}, {"fixed": "abc123"}]},
+                    {"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "1.4.0"}]}
+                 ]},
+                {"package": {"name": "foo-bar", "ecosystem": "npm"},
+                 "ranges": [{"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "9.0.0"}]}]},
+                {"package": {"name": "other", "ecosystem": "PyPI"},
+                 "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}]}]}
+            ]
+        }))
+        .unwrap();
+        let spec = vuln_spec(&v, "foo.bar", "PyPI");
+        assert_eq!(spec.versions, ["1.0.0"]);
+        assert_eq!(spec.ranges.len(), 1);
+        assert_eq!(spec.ranges[0].fixed.as_deref(), Some("1.4.0"));
+
+        let a = map_vuln(&v, "foo.bar", "1.2.0", "PyPI");
+        assert_eq!(a.fixed_in.as_deref(), Some("1.4.0"));
+        assert!(vuln_spec(&v, "foo-bar", "crates.io").ranges.is_empty());
+        assert!(same_package("x", "x", "npm") && !same_package("X", "x", "npm"));
     }
 
     #[test]
@@ -345,6 +515,34 @@ mod tests {
         assert!(!batch.is_empty());
         assert_eq!(batch[0].source.as_deref(), Some("online"));
         std::env::remove_var("PKG_GUARD_OSV_MODE");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_online_fixed_in_and_verified_recommendation() {
+        // requests 2.31.0: GHSA-9wx4-h78v-vm56 fixed in 2.32.0, but later
+        // advisories also cover 2.32.x, so the recommendation must be higher.
+        std::env::set_var("PKG_GUARD_OSV_MODE", "online");
+        let single = query_package(Ecosystem::Python, "requests", "2.31.0")
+            .await
+            .expect("online query");
+        let batch = query_batch(&[(Ecosystem::Python, "requests".into(), "2.31.0".into())])
+            .await
+            .expect("online batch");
+        std::env::remove_var("PKG_GUARD_OSV_MODE");
+
+        for r in [&single, &batch[0]] {
+            let a = r
+                .advisories
+                .iter()
+                .find(|a| a.id == "GHSA-9wx4-h78v-vm56")
+                .expect("known advisory");
+            assert_eq!(a.fixed_in.as_deref(), Some("2.32.0"));
+            assert_ne!(a.severity, "UNKNOWN", "batch results are hydrated");
+            let rec = r.recommended_version.as_deref().expect("recommendation");
+            assert!(version::cmp_version(rec, "2.32.4").is_gt(), "{rec}");
+        }
+        assert_eq!(single.recommended_version, batch[0].recommended_version);
     }
 
     #[tokio::test]

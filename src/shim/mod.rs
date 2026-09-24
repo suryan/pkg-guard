@@ -26,7 +26,8 @@
 //! ## Known limitations (transparent calls are never perfect)
 //! - Bypass via absolute path (`/usr/bin/pip`) or clearing PATH
 //! - Incomplete coverage of exotic install forms (git URLs, local paths)
-//! - Complex extras / version ranges may be incomplete in transitive walk
+//! - Complex extras / version ranges may be incomplete in transitive walk; the
+//!   walk is time/size bounded and reports unverified nodes instead of hiding them
 //! - Recursion risk if the "real" binary is not resolved correctly
 //! - Container `audit` is **not** run by default (too slow for every install)
 //! - GUI/MCP hosts may not load bashrc — set the same PATH prepend there

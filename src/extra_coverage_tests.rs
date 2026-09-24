@@ -525,9 +525,11 @@ fn osv_query_result_helpers() {
             version: "1".into(),
             ecosystem: "PyPI".into(),
             details_url: None,
+            fixed_in: None,
         }],
         error: None,
         source: Some("test".into()),
+        recommended_version: None,
     };
     assert!(r.has_malware());
     assert!(r.has_critical_or_high());

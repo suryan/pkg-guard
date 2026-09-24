@@ -23,8 +23,10 @@ fn audit_package_tool() -> ToolDefinition {
     ToolDefinition {
         name: "audit_package".to_string(),
         description: "Audit a software package for security risks. Checks for typosquatting, \
-            OSV.dev version advisories (CVE/MAL), registry metadata, and optionally runs \
-            isolated container audit monitoring network/filesystem/process activity."
+            OSV.dev version advisories (CVE/MAL, with fixed_in per advisory and \
+            osv.recommended_version = lowest version clear of all known advisories), registry \
+            metadata, and optionally runs isolated container audit monitoring \
+            network/filesystem/process activity."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -122,7 +124,8 @@ fn scan_lockfile_tool() -> ToolDefinition {
     ToolDefinition {
         name: "scan_lockfile".to_string(),
         description: "Scan a lock file for known malicious packages (custom + feed-cache \
-            blocklists; nothing embedded in the binary) and OSV.dev version advisories."
+            blocklists; nothing embedded in the binary) and OSV.dev version advisories. \
+            upgrade_suggestions lists, per affected package, the recommended upgrade version."
             .to_string(),
         input_schema: json!({
             "type": "object",

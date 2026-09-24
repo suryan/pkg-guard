@@ -226,6 +226,8 @@ against legitimate package names.
 | `PKG_GUARD_MIN_COVERAGE` | Precommit line-coverage floor (default **90**) |
 | `PKG_GUARD_SHIM_MODE` | Shim policy: `enforce` (default), `warn`, or `off` |
 | `PKG_GUARD_SHIM_DIR` | Override default shim install dir (`~/.local/share/pkg-guard/shims`) |
+| `PKG_GUARD_SHIM_TRANSITIVE` | Transitive crawl for uvx/npx gates (default on; `0` disables) |
+| `PKG_GUARD_TRANSITIVE_*` | Crawl budget/caps/cache/on-incomplete policy (see `docs/usage.md`) |
 | `PKG_GUARD_REAL_<TOOL>` | Optional absolute path to real PM (prefer PATH order: shim dir first) |
 | `PKG_GUARD_OSV_MODE` | OSV lookup: `auto` (local dump if present, else API), `local`, `online` |
 | `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` | Standard XDG roots for config/cache |

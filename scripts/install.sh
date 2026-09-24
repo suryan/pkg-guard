@@ -13,7 +13,7 @@
 #
 # From a local clone:
 #   ./scripts/install.sh --local --with-shims
-#   ./scripts/install.sh --ref v0.5.0 --with-shims --with-osv
+#   ./scripts/install.sh --ref v0.6.0 --with-shims --with-osv
 #
 # Environment (optional):
 #   PKG_GUARD_REPO     git URL (default: https://github.com/suryan/pkg-guard.git)
@@ -64,7 +64,7 @@ Examples:
 
   ./scripts/install.sh --local --with-shims
   ./scripts/install.sh --local --with-shims --shims all
-  PKG_GUARD_REF=v0.5.0 ./scripts/install.sh --yes --with-shims --with-osv
+  PKG_GUARD_REF=v0.6.0 ./scripts/install.sh --yes --with-shims --with-osv
 
 Shims: global default is MCP-only (uvx, uv, npx). Gate pip/npm/cargo per project
 (see docs/usage.md and ~/.config/pkg-guard/project-shims.example.env).

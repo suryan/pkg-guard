@@ -210,6 +210,31 @@ pkg-guard audit -e python -p jinja2 -v 2.4.1
 
 Every resolved package in the lockfile is OSV-checked (no package-count cap). Large online scans may take longer; prefer a local dump (`osv update`) for big trees.
 
+#### Fixed versions and upgrade advice
+
+When an advisory has a published fix, pkg-guard reports it:
+
+| Field | Where | Meaning |
+|-------|-------|---------|
+| `fixed_in` | each advisory (`osv.advisories[]`, `osv_findings[]`) | Lowest version that fixes **this** advisory for your version (respects backport lines, e.g. `1.26.19` for a 1.26.x install) |
+| `recommended_version` | `audit` → `osv` | Lowest version clear of **every** known advisory. This can be higher than any single `fixed_in`, because a fix release may be hit by another advisory |
+| `upgrade_suggestions[]` | `scan` | One entry per affected package: `current`, `recommended`, advisory ids, `advice` |
+
+```text
+pkg-guard shim [pip]: BLOCKED — urllib3@1.26.5 OSV high/critical GHSA-… (upgrade urllib3 to 2.7.0, the lowest version with no known advisories)
+```
+
+With the local dump, the recommendation is checked against every advisory for the
+package. Online, the candidate version is re-queried against OSV (up to 3 rounds)
+and omitted if it can't be confirmed clean. No recommendation means no fix is
+known: malware (`MAL-*`) says to remove the package; otherwise consider an
+alternative. Version ordering is approximate (dotted numeric), not a full
+per-ecosystem solver.
+
+Indexes built before pkg-guard understood multi-window OSV ranges (one range
+with several introduced/fixed pairs) are rebuilt automatically on the next
+`osv update` or scan auto-refresh.
+
 MCP: `osv_status`, `osv_update` (optional `ecosystems: string[]`), plus `blocklist_status`, `update_db` (`feeds`, optional `osv: true`).
 
 ## Transparent package-manager shims
@@ -246,9 +271,27 @@ in a dep you never typed.
 | `npx -y pkg@ver` / `pnpm dlx` / `yarn dlx` | Same (npm registry deps) |
 | `pip install` / `npm install` / `cargo add` | As before (install line packages / files) |
 
-Transitive resolve walks the full runtime tree (cycle-safe). Not a full solver
-(optional extras / complex ranges may be incomplete). Disable with
-`PKG_GUARD_SHIM_TRANSITIVE=0`.
+Transitive resolve walks the runtime tree from registry metadata (cycle-safe,
+one request per package, 16 in parallel). Not a full solver: optional extras
+are skipped, and npm range specs (`^1.2.0`) are followed via the dependency's
+`latest` metadata and checked by name only (no OSV without an exact version).
+
+Because it runs before every launch, the crawl is **bounded**:
+
+| Knob | Default | Effect |
+|------|---------|--------|
+| `PKG_GUARD_TRANSITIVE_BUDGET_MS` | `8000` | Wall-clock cap for the whole crawl |
+| `PKG_GUARD_TRANSITIVE_MAX_NODES` | `1000` | Max packages whose metadata is fetched |
+| `PKG_GUARD_TRANSITIVE_MAX_DEPTH` | `16` | Max dependency depth expanded |
+| `PKG_GUARD_TRANSITIVE_CONCURRENCY` | `16` | Parallel registry requests |
+| `PKG_GUARD_TRANSITIVE_CACHE_TTL_SECS` | `86400` | On-disk metadata cache (`<cache>/transitive/`); `0` disables |
+
+Anything that could not be verified (registry error/404, git/URL/file deps, or
+a limit hit) is reported as **`transitive audit incomplete … NOT checked`**,
+never treated as clean. By default that is a warning; set
+`PKG_GUARD_TRANSITIVE_ON_INCOMPLETE=block` to deny the launch instead
+(enforce mode only). OSV lookups for the tree run in parallel with a 10 s cap.
+Disable the crawl entirely with `PKG_GUARD_SHIM_TRANSITIVE=0`.
 
 **Residual gaps**
 
@@ -825,6 +868,12 @@ Also see the summary in [README.md — Related tools](../README.md#related-tools
 | `PKG_GUARD_SHIM_MODE` | `enforce` \| `warn` \| `off` (default enforce) |
 | `PKG_GUARD_SHIM_DIR` | Default dir for `shim install` (`~/.local/share/pkg-guard/shims`) |
 | `PKG_GUARD_SHIM_TRANSITIVE` | Expand uvx/npx deps for gate (default **on**; set `0` to disable) |
+| `PKG_GUARD_TRANSITIVE_BUDGET_MS` | Wall-clock cap for the transitive crawl (default `8000`) |
+| `PKG_GUARD_TRANSITIVE_MAX_NODES` / `_MAX_DEPTH` | Crawl size caps (default `1000` / `16`) |
+| `PKG_GUARD_TRANSITIVE_CONCURRENCY` | Parallel registry requests (default `16`) |
+| `PKG_GUARD_TRANSITIVE_CACHE_TTL_SECS` | Registry metadata cache TTL (default `86400`; `0` disables) |
+| `PKG_GUARD_TRANSITIVE_ON_INCOMPLETE` | `warn` (default) \| `block` when the tree could not be fully verified |
+| `PKG_GUARD_NPM_REGISTRY` / `PKG_GUARD_PYPI_URL` | Registry base URLs for the crawl (mirrors) |
 | `PKG_GUARD_REAL_<TOOL>` | Optional absolute path to real tool; prefer PATH order instead |
 | `RUST_LOG` | Tracing filter (`debug`, `info`, …) |
 
@@ -855,6 +904,20 @@ which -a uvx
 3. If login shell still puts `~/.local/bin` first, source `shim.env` **last** in `~/.profile`
 4. MCP/IDE: set PATH in the host env (they often skip bashrc)
 5. `pkg-guard shim status` — each tool should show `real_binary` and `shim_present: true`
+
+### All MCP servers slow or failing to start at once
+
+MCP hosts launch servers through the `uvx`/`npx` shims, so a slow gate affects
+every server simultaneously. The gate is bounded (transitive crawl ≤
+`PKG_GUARD_TRANSITIVE_BUDGET_MS`, OSV ≤ 10 s), and repeat launches hit the
+metadata cache. If startup is still too slow for the host's timeout:
+
+1. Lower the budget, e.g. `PKG_GUARD_TRANSITIVE_BUDGET_MS=3000` (partial crawls are reported, not trusted)
+2. Build the local OSV dump (`pkg-guard osv update`) so OSV checks don't hit the network
+3. Last resort: `PKG_GUARD_SHIM_TRANSITIVE=0` (top-level checks only)
+
+Set these in the MCP server's `env` block; hosts often don't read `~/.bashrc`.
+Look for `pkg-guard shim` lines on the server's stderr to see what was checked.
 
 ### could not find real 'uvx' on PATH
 
