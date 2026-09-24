@@ -35,6 +35,7 @@ pub(crate) fn build_scan_result(
         osv_findings,
         findings_count,
         osv_count,
+        unresolved_dependencies: vec![],
         upgrade_suggestions: vec![],
         status,
     }

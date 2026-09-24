@@ -17,6 +17,7 @@ use serde_json::Value;
 use crate::data::blocklist::is_blocklisted;
 use crate::data::{Ecosystem, MaliciousFinding, PinResult, PinnedDep, ScanResult, UnpinnedDep};
 
+mod maven;
 mod scan_status;
 use scan_status::{build_scan_result, compose_scan_status};
 
@@ -83,10 +84,24 @@ pub fn scan_lockfile(file_path: &str) -> Result<ScanResult> {
         scan_pipfile_lock(&content)?
     } else if filename == "Cargo.lock" {
         scan_cargo_lockfile(&content)
+    } else if let Some(java) = maven::java_deps(filename, &content) {
+        let mut result = build_scan_result(
+            file_path.to_string(),
+            maven::blocklist_findings(&java),
+            vec![],
+            java.resolved.len() + java.unresolved.len(),
+            0,
+            None,
+            None,
+        );
+        result.status += &maven::coverage_note(file_path, java.unresolved.len());
+        result.unresolved_dependencies = java.unresolved;
+        return Ok(result);
     } else {
         return Err(anyhow!(
-            "Unsupported lock file: '{filename}'. \
-             Supported: package-lock.json, yarn.lock, requirements.txt, Pipfile.lock, Cargo.lock"
+            "Unsupported lock file: '{filename}'. Supported: package-lock.json, yarn.lock, \
+             requirements.txt, Pipfile.lock, Cargo.lock, pom.xml, gradle.lockfile, \
+             `mvn dependency:list` output"
         ));
     };
 
@@ -209,6 +224,7 @@ pub async fn scan_lockfile_with_osv(file_path: &str) -> Result<ScanResult> {
             );
         }
     }
+    result.status += &maven::coverage_note(file_path, result.unresolved_dependencies.len());
 
     Ok(result)
 }
@@ -250,6 +266,12 @@ fn extract_resolved_packages(file_path: &str) -> Result<Vec<(Ecosystem, String, 
         extract_pipfile_packages(&content)
     } else if filename == "Cargo.lock" {
         Ok(extract_cargo_packages(&content))
+    } else if let Some(java) = maven::java_deps(filename, &content) {
+        Ok(java
+            .resolved
+            .into_iter()
+            .map(|(n, v)| (Ecosystem::Java, n, v))
+            .collect())
     } else {
         // yarn.lock version extraction not implemented yet
         Ok(vec![])

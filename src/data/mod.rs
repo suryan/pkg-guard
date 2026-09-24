@@ -225,6 +225,9 @@ pub struct ScanResult {
     /// Number of OSV advisories
     #[serde(default)]
     pub osv_count: usize,
+    /// Dependencies whose version could not be resolved (name-checked only)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unresolved_dependencies: Vec<String>,
     /// One entry per vulnerable package: what to upgrade to (or remove)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub upgrade_suggestions: Vec<UpgradeSuggestion>,

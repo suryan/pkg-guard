@@ -132,7 +132,7 @@ fn scan_lockfile_tool() -> ToolDefinition {
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Path to the lock file (package-lock.json, yarn.lock, Pipfile.lock, etc.)"
+                    "description": "Path to the lock file (package-lock.json, yarn.lock, Pipfile.lock, Cargo.lock, requirements.txt, gradle.lockfile, `mvn dependency:list` output, or pom.xml for direct deps only)"
                 }
             },
             "required": ["file_path"]

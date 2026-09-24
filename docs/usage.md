@@ -566,8 +566,25 @@ pkg-guard scan -f package-lock.json
 pkg-guard scan -f yarn.lock
 pkg-guard scan -f Pipfile.lock
 pkg-guard scan -f Cargo.lock
+pkg-guard scan -f gradle.lockfile
+pkg-guard scan -f pom.xml
 # make scan FILE=Cargo.lock
 ```
+
+**Maven / Gradle.** `pom.xml` lists only **direct** dependencies. pkg-guard
+resolves `${properties}` and the POM's own `<dependencyManagement>`; versions
+inherited from a parent POM or an imported BOM can't be resolved from the file
+alone and are listed in `unresolved_dependencies` (blocklist-checked by name,
+not OSV-checked). For the full resolved tree, including transitive deps, scan
+Maven's own resolution output; it is recognised by content, whatever the file name:
+
+```bash
+mvn dependency:list -DoutputFile=deps.txt
+pkg-guard scan -f deps.txt
+```
+
+Gradle: enable [dependency locking](https://docs.gradle.org/current/userguide/dependency_locking.html)
+and scan the generated `gradle.lockfile`.
 
 Example output:
 ```json

@@ -70,7 +70,9 @@ enum Commands {
     },
     /// Scan a lock file for known malicious packages
     Scan {
-        /// Path to lock file
+        /// Path to lock file (package-lock.json, yarn.lock, requirements*.txt,
+        /// Pipfile.lock, Cargo.lock, gradle.lockfile, pom.xml, or
+        /// `mvn dependency:list` output)
         #[arg(short, long)]
         file: String,
     },
